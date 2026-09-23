@@ -625,6 +625,7 @@ function openSocket(sessionId) {
   ws.onmessage = (ev) => handleMessage(JSON.parse(ev.data));
   ws.onclose = () => {
     if (!state.report) setRoomStatus("连接已断开", false);
+    stopVoice();
     $("btnSend").disabled = false;
   };
   ws.onerror = () => setRoomStatus("连接异常", false);
@@ -669,6 +670,7 @@ function handleMessage(msg) {
       state.report = msg.payload;
       setRoomStatus("面试结束", false);
       clearInterval(state.timer);
+      stopVoice();
       renderReport(msg.payload);
       showView("report");
       break;
@@ -733,38 +735,60 @@ function startVoice() {
       el.textContent = "识别中… " + interim;
     }
     if (final) {
-      $("liveTranscript").textContent = "已识别: " + final;
+      $("liveTranscript").hidden = true;
       submitText(final);
-      stopVoice();
+      // 这里不 stopVoice: 语音模式应当跨轮次保持开启, 由用户手动关闭,
+      // 或在面试结束时才关闭。识别到一句就关掉, 等于每答一句都要重新点一次按钮。
     }
   };
-  rec.onerror = () => {
-    $("liveTranscript").hidden = true;
-    stopVoice();
+  rec.onerror = (ev) => {
+    if (ev && (ev.error === "not-allowed" || ev.error === "service-not-allowed")) {
+      toast("麦克风权限被拒绝，请在浏览器设置里允许后重试");
+      stopVoice();
+      return;
+    }
+    // no-speech / network 等可恢复错误: 静默重启识别。
+    if (state.voiceActive && !state.speaking) {
+      setTimeout(() => restartRecognition(rec), 300);
+    }
   };
   rec.onend = () => {
     if (state.voiceActive && !state.speaking) {
-      try { rec.start(); } catch (_) { /* 忽略连续会话重启失败 */ }
+      restartRecognition(rec);
     }
   };
 
   state.recognition = rec;
   state.voiceActive = true;
-  $("btnVoice").textContent = "停止语音";
-  $("btnVoice").classList.add("primary");
-  $("btnVoice").classList.remove("outline");
+  updateVoiceButton();
   try { rec.start(); } catch (_) { /* 权限被拒时由 onerror 兜底 */ }
 }
 
 function stopVoice() {
   state.voiceActive = false;
+  state.speaking = false;
   if (state.recognition) {
     try { state.recognition.stop(); } catch (_) { /* ignore */ }
     state.recognition = null;
   }
-  $("btnVoice").textContent = "语音";
-  $("btnVoice").classList.remove("primary");
-  $("btnVoice").classList.add("outline");
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  const live = $("liveTranscript");
+  if (live) live.hidden = true;
+  updateVoiceButton();
+}
+
+function updateVoiceButton() {
+  const b = $("btnVoice");
+  b.textContent = state.voiceActive ? "停止语音" : "语音";
+  b.classList.toggle("primary", state.voiceActive);
+  b.classList.toggle("outline", !state.voiceActive);
+}
+
+// restartRecognition 在"该听"的时候重新拉起识别。
+// 不能无条件重启: 播报期间重启会把 AI 自己的声音录进来, 形成回声式误识别。
+function restartRecognition(rec) {
+  if (!state.voiceActive || state.speaking || state.recognition !== rec) return;
+  try { rec.start(); } catch (_) { /* 已启动会抛错, 忽略 */ }
 }
 
 function submitText(text) {
@@ -776,14 +800,16 @@ function submitText(text) {
 
 function speakQuestion(text) {
   if (!state.voiceActive || !("speechSynthesis" in window)) return;
+  // 播报期间暂停识别, 否则麦克风会把 AI 自己的语音当成候选人的回答。
+  state.speaking = true;
+  if (state.recognition) { try { state.recognition.stop(); } catch (_) { /* ignore */ } }
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "zh-CN";
   const zh = speechSynthesis.getVoices().find((v) => v.lang && v.lang.startsWith("zh"));
   if (zh) u.voice = zh;
-  u.onstart = () => { state.speaking = true; };
-  u.onend = () => { state.speaking = false; };
-  u.onerror = () => { state.speaking = false; };
+  u.onend = () => { state.speaking = false; restartRecognition(state.recognition); };
+  u.onerror = () => { state.speaking = false; restartRecognition(state.recognition); };
   speechSynthesis.speak(u);
 }
 
@@ -1009,17 +1035,16 @@ function renderReport(rep) {
 async function loadLatestReport() {
   if (state.report) { renderReport(state.report); return; }
   try {
-    const data = await fetchJSON("/api/v1/sessions?limit=1");
-    const first = (data.sessions || [])[0];
-    if (!first) { $("repDetail").innerHTML = "<p class='muted small'>还没有面试记录。</p>"; return; }
-    let payload;
-    try {
-      payload = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(first.session_id)}/report`);
-    } catch (err) {
-      $("repDetail").innerHTML = `<p class="muted small">${escapeHTML(err.message)}</p>`;
+    const data = await fetchJSON("/api/v1/sessions?limit=20");
+    // 找最近一条"已完成"的会话: 最新一条往往是刚创建、还没面完的,
+    // 直接取第一条会拿到一个还没有报告的会话, 报告页就空掉了。
+    const finished = (data.sessions || []).find((s) => s.status === "finished");
+    if (!finished) {
+      $("repDetail").innerHTML = "<p class='muted small'>还没有已完成的面试，报告尚未生成。</p>";
       return;
     }
-    state.session = first;
+    const payload = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(finished.session_id)}/report`);
+    state.session = finished;
     state.report = payload;
     renderReport(payload);
   } catch (err) {
@@ -1036,37 +1061,131 @@ function renderProfileForm() {
   $("pfInterviewer").value = state.profile.interviewer;
 }
 
+function scopeLabel(scope) {
+  return { recording: "录音授权", scoring: "评分授权", retention: "数据留存" }[scope] || scope || "—";
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN");
+}
+
+// openReportBySession 从个人资料打开某一场已结束面试的报告。
+async function openReportBySession(sid) {
+  try {
+    const payload = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sid)}/report`);
+    state.report = payload;
+    state.session = { session_id: sid };
+    renderReport(payload);
+    showView("report");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
 async function refreshProfile() {
   renderProfileForm();
 
   try {
-    const data = await fetchJSON("/api/v1/sessions?limit=8");
+    const data = await fetchJSON("/api/v1/sessions?limit=50");
     const sessions = data.sessions || [];
-    $("pfSessions").innerHTML = sessions.length
-      ? sessions.map((s) => `
-          <div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line-2)">
-            <span>${escapeHTML(s.session_id)}</span>
-            <span>${escapeHTML(s.position || "")} · ${escapeHTML(s.status)} · ${escapeHTML(s.recommendation || "—")}</span>
-          </div>`).join("")
-      : "还没有面试记录。";
+    const finished = sessions.filter((s) => s.status === "finished");
 
-    const target = sessions[0];
-    if (!target) { $("pfConsents").textContent = "还没有面试记录。"; return; }
-    const cdata = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(target.session_id)}/consents`);
-    const consents = cdata.consents || [];
+    const statsHTML = `
+      <div class="stats-grid" style="margin-bottom:14px">
+        <div>面试场次<b>${sessions.length}</b></div>
+        <div>已完成<b>${finished.length}</b></div>
+        <div>最近结论<b>${escapeHTML((finished[0] && recLabel(finished[0].recommendation)) || "—")}</b></div>
+      </div>`;
+
+    $("pfSessions").innerHTML = statsHTML + (sessions.length
+      ? sessions.map((s) => `
+          <div class="hist-row ${s.status === "finished" ? "is-finished" : ""}" data-sid="${escapeHTML(s.session_id)}" data-status="${escapeHTML(s.status)}">
+            <div class="hist-main">
+              <strong>${escapeHTML(s.position || "面试")}</strong>
+              <span class="muted small">${escapeHTML(s.session_id)}</span>
+            </div>
+            <span class="chip ${s.status === "finished" ? "" : "muted-chip"}">${
+              s.status === "finished" ? (recLabel(s.recommendation) || "已完成") : "进行中"
+            }</span>
+          </div>`).join("")
+      : "<p class='muted small'>还没有面试记录。</p>");
+
+    // 授权留痕: 逐场找, 展示最近一次有授权记录的那场。
+    let consents = [];
+    for (const s of sessions) {
+      try {
+        const c = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(s.session_id)}/consents`);
+        if ((c.consents || []).length) { consents = c.consents; break; }
+      } catch (_) { /* 无授权记录, 继续看下一场 */ }
+    }
     $("pfConsents").innerHTML = consents.length
       ? consents.map((c) => `
           <div>
-            <span>${escapeHTML(c.Scope || c.scope)}</span>
-            <span>${escapeHTML(new Date(c.AgreedAt || c.agreed_at).toLocaleString("zh-CN"))} · ${escapeHTML(c.IP || c.ip || "")}</span>
+            <span>${escapeHTML(scopeLabel(c.scope))}</span>
+            <span>${escapeHTML(fmtTime(c.agreed_at))} · ${escapeHTML(c.ip || "")}</span>
           </div>`).join("")
-      : "没有授权记录。";
+      : "还没有授权记录。";
+
+    // 已结束的场次可点开看报告。
+    document.querySelectorAll("#pfSessions .hist-row.is-finished").forEach((row) => {
+      row.onclick = () => openReportBySession(row.dataset.sid);
+    });
   } catch (err) {
     $("pfSessions").textContent = "加载失败：" + err.message;
   }
 }
 
 /* ---------------- 事件绑定 ---------------- */
+
+// resetSession 结束当前会话并清空一切状态。
+//
+// 之前"再面一场"只清了 state.prep.step, 没清清单里的简历/设备/同意记录,
+// 于是下一场的概览页还停在 100%。这里把会话、语音、准备清单一起归零,
+// 只保留候选人偏好(称呼/公司/岗位) —— 那些不该被一场面试重置。
+function resetSession() {
+  stopVoice();
+  clearInterval(state.timer);
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    try { state.ws.close(); } catch (_) { /* ignore */ }
+  }
+  state.ws = null;
+  state.session = null;
+  state.report = null;
+  state.stage = null;
+  state.preview = false;
+  state.elapsedBefore = 0;
+  state.prep = {
+    step: 0,
+    resume: "",
+    resumeSkipped: false,
+    deviceChecked: false,
+    micLevel: 0,
+    consentRecording: true,
+    consentScoring: true,
+    overviewSeen: false,
+  };
+  $("transcript").innerHTML = "";
+  $("roomQuestion").textContent = "";
+}
+
+// exportReportJSON 把报告下载为 JSON 文件。
+// 内嵌浏览器里 window.print() 常常是空操作, 下载文件则是实打实能落地的导出。
+function exportReportJSON() {
+  if (!state.report) { toast("还没有可导出的报告"); return; }
+  const sid = state.session ? state.session.session_id : "local";
+  const blob = new Blob([JSON.stringify(state.report, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `interview-report-${sid}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("报告已导出为 JSON");
+}
 
 function bind() {
   $("navHome").onclick = () => { renderOverview(); showView("overview"); };
@@ -1145,13 +1264,15 @@ function bind() {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("formAnswer").requestSubmit();
   });
   $("btnAnother").onclick = () => {
-    state.session = null;
-    state.report = null;
-    state.prep.step = 0;
+    resetSession();
     renderOverview();
     showView("overview");
   };
-  $("btnPrint").onclick = () => window.print();
+  $("btnPrint").onclick = () => {
+    if (!state.report) { toast("还没有可打印的报告"); return; }
+    window.print();
+  };
+  $("btnExport").onclick = exportReportJSON;
 
   for (const [id, key] of [["pfName", "name"], ["pfCompany", "company"],
     ["pfPosition", "position"], ["pfInterviewer", "interviewer"]]) {

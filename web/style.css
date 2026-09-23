@@ -378,6 +378,17 @@ textarea { resize: vertical; }
 }
 .consent-list div:first-child { border-top: 0; }
 
+/* 个人资料 · 历史会话 */
+.hist-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 4px; border-top: 1px solid var(--line-2); border-radius: 8px;
+}
+.hist-row:first-of-type { border-top: 0; }
+.hist-row.is-finished { cursor: pointer; }
+.hist-row.is-finished:hover { background: var(--line-2); }
+.hist-main { display: flex; flex-direction: column; gap: 2px; }
+.hist-main strong { font-size: 14.5px; }
+
 /* ---------- 报告: 结论摘要 / 节奏 / 逐轮回放 ---------- */
 .summary { display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 22px; }
 .summary-text { flex: 1; min-width: 240px; color: var(--ink-2); font-size: 14.5px; line-height: 1.8; }
