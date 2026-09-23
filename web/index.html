@@ -23,9 +23,127 @@
     <div class="nav-right">
       <span class="pill warn" id="serviceStatus" hidden><i></i>服务未连接</span>
       <button class="nav-link ghost" id="navAbout">产品介绍</button>
-      <span class="avatar" id="navAvatar">陈</span>
+      <div class="avatar-wrap">
+        <button class="avatar-btn" id="avatarBtn" aria-haspopup="menu" aria-expanded="false" title="账户与设置">
+          <span class="avatar" id="navAvatar">陈</span>
+        </button>
+        <div class="menu" id="avatarMenu" hidden role="menu">
+          <div class="menu-head">
+            <strong id="menuName">陈雨</strong>
+            <span class="muted small" id="menuRole">高级后端工程师</span>
+          </div>
+          <button class="menu-item" role="menuitem" data-action="profile">个人资料与授权</button>
+          <button class="menu-item" role="menuitem" data-action="product">产品介绍</button>
+          <button class="menu-item" role="menuitem" data-action="redetect">
+            服务状态：<span id="menuService">检测中…</span>
+          </button>
+          <button class="menu-item" role="menuitem" data-action="switch">切换候选人</button>
+        </div>
+      </div>
     </div>
   </header>
+
+  <div class="modal" id="productModal" hidden>
+    <div class="modal-scrim" id="productScrim"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="productTitle">
+      <button class="modal-close" id="productClose" aria-label="关闭">×</button>
+      <div class="modal-body">
+        <p class="eyebrow">产品介绍</p>
+        <h1 class="display" id="productTitle">一场面试，从流程到证据都说得清。</h1>
+        <p class="lede">
+          这是面向企业招聘的 AI 线上面试中台：把 1 到 5 轮面试变成可编排的流程，
+          用多 Agent 承担提问、追问与评分，所有结论都能回到候选人的原话。
+        </p>
+
+        <article class="doc">
+          <h2>一、面试怎么跑</h2>
+          <p>面试由状态机驱动，固定六个阶段，每一步的时长与考察项都有预算：</p>
+          <ol class="doc-steps">
+            <li><b>开场</b><span>自我介绍，建立上下文</span></li>
+            <li><b>经历深挖</b><span>围绕简历项目逐层追问</span></li>
+            <li><b>技术基础</b><span>语言、运行时、分布式</span></li>
+            <li><b>场景设计</b><span>开放设计题与权衡</span></li>
+            <li><b>候选人反问</b><span>候选人提问，不计分</span></li>
+            <li><b>收尾</b><span>同步后续流程</span></li>
+          </ol>
+          <p class="muted small">
+            调度同时受两个约束：<b>时间预算</b>（剩余不足 20% 时只追问高重要性考点）
+            与<b>覆盖度</b>（确保每个考察项都被问到）。单题追问不超过 2 层，
+            全场超时会硬收口并把未覆盖项写进报告。
+          </p>
+        </article>
+
+        <article class="doc">
+          <h2>二、AI 怎么决定"追问什么"</h2>
+          <p>不是让模型自由发挥，而是<b>检索参考答案</b>后挑缺口：</p>
+          <ul class="doc-list">
+            <li>每道题的参考答案被拆成若干要点，全部进检索索引</li>
+            <li>检索是混合的：BM25（术语精确命中）+ 向量（语义泛化）+ RRF 融合 + 精排</li>
+            <li>回答里没覆盖、又被参考答案强调的要点，才会成为追问目标</li>
+            <li>如果简历里恰好写到这个要点，追问会直接引用简历原话（原文定位）</li>
+          </ul>
+        </article>
+
+        <article class="doc">
+          <h2>三、评分为什么可信</h2>
+          <p>每一层都在防"看起来合理但无法核对"的分数：</p>
+          <ul class="doc-list">
+            <li><b>五级 rubric</b>：等级到分数的换算规则写死在代码里，不让模型决定</li>
+            <li><b>证据绑定</b>：每个维度分必须挂候选人原话，拿不出证据的分数直接作废</li>
+            <li><b>证据反查</b>：模型引用的原话必须真的出现在回答里，编造的会被丢弃</li>
+            <li><b>双模型交叉</b>：分歧在容忍范围内取保守值，超阈值由第三方仲裁</li>
+            <li><b>降级可见</b>：大模型不可用时自动回落到规则评分，并在报告里标注</li>
+          </ul>
+        </article>
+
+        <article class="doc">
+          <h2>四、1 到 5 轮的 AI 参与度</h2>
+          <table class="doc-table">
+            <thead><tr><th>轮次</th><th>AI 角色</th><th>参与度</th><th>人类角色</th></tr></thead>
+            <tbody>
+              <tr><td>1 面</td><td>全自动面试官</td><td>100%</td><td>仅异常复核</td></tr>
+              <tr><td>2 面</td><td>监考 + 判题 + 追问</td><td>90%</td><td>代码抽检</td></tr>
+              <tr><td>3 面</td><td>主持 + 抬杠式追问</td><td>60%</td><td>人类终审</td></tr>
+              <tr><td>4 面</td><td>Copilot 实时辅助</td><td>30%</td><td>人类主导</td></tr>
+              <tr><td>5 面</td><td>初筛 + 纪要</td><td>20%</td><td>HR 主导</td></tr>
+            </tbody>
+          </table>
+          <p class="muted small">
+            AI 参与度随轮次递减，终面永远由人决定；同时保留"AI 落选 → 人类复议"的申诉通道。
+          </p>
+        </article>
+
+        <article class="doc">
+          <h2>五、技术底座</h2>
+          <ul class="doc-list">
+            <li><b>接入</b>：Go 长连接网关，WebSocket 承载文本与二进制音频（PCM16）</li>
+            <li><b>实时音频</b>：VAD 端点检测（能量+过零率、噪声底自适应）、语义/静音/超时三层收口、打断级联取消</li>
+            <li><b>编排</b>：轮次状态机 + 问题 DAG；断线重连靠重放已落库问答，可跨进程恢复</li>
+            <li><b>存储</b>：MySQL（业务主数据）/ Redis（会话快照）/ 内存（零依赖演示），三套实现共用行为契约测试</li>
+            <li><b>治理</b>：单机限流、优雅关闭、授权留痕可查、成本与延迟分段观测</li>
+          </ul>
+        </article>
+
+        <article class="doc">
+          <h2>六、数据与边界</h2>
+          <ul class="doc-list">
+            <li>开始面试前需要候选人<b>明示同意</b>，同意的时间、范围与来源 IP 会留痕并可随时核对</li>
+            <li>明确告知"本轮由 AI 面试官主持"，不做伪装成真人的设计</li>
+            <li>不做情绪识别与面相分析；反作弊只产出风险事件供人判断，不自动淘汰</li>
+            <li class="muted">
+              当前未完成：浏览器采集 PCM 上行、真实厂商 ASR/TTS 联调、多租户 RBAC
+              与审计日志写入、在线编程沙箱、语义向量默认使用本地词面相似度。
+            </li>
+          </ul>
+        </article>
+
+        <div class="actions">
+          <button class="btn primary" id="productCta">开始一场面试</button>
+          <button class="btn outline" id="productCloseBottom">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <main id="main">
     <!-- ① 候选人空间 -->

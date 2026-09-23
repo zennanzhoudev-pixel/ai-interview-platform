@@ -84,19 +84,67 @@ async function fetchJSON(url, options) {
   return data;
 }
 
+let serviceTimer = null;
+
 function setServiceUp(up) {
-  const el = $("serviceStatus");
-  if (el) el.hidden = up;
+  const pill = $("serviceStatus");
+  if (pill) pill.hidden = up;
+  const item = $("menuService");
+  if (item) item.textContent = up ? "已连接" : "未连接（点击重新检测）";
 }
 
-// checkService 在进页面时先探一次服务可用性, 而不是等到点"开始面试"才发现。
+// checkService 探测后端是否可用。
+//
+// 必须周期性重探: 只在页面加载时探一次的话, 服务恢复后提示会一直挂在那儿,
+// 变成一条"过期但看起来像实时"的误导信息 —— 用户看到的明明是服务正常的
+// 页面, 却被告诉服务没连上。
 async function checkService() {
   try {
     const res = await fetch("/api/v1/health", { cache: "no-store" });
     setServiceUp(res.ok);
+    return res.ok;
   } catch (_) {
     setServiceUp(false);
+    return false;
   }
+}
+
+function startServiceWatch() {
+  checkService();
+  clearInterval(serviceTimer);
+  serviceTimer = setInterval(checkService, 10000);
+  // 切回标签页或窗口重新获得焦点时再探一次, 避免最长 10 秒的过期窗口。
+  window.addEventListener("focus", checkService);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkService();
+  });
+}
+
+/* ---------------- 头像菜单与产品介绍 ---------------- */
+
+function toggleAvatarMenu(force) {
+  const menu = $("avatarMenu");
+  const btn = $("avatarBtn");
+  const open = force === undefined ? menu.hidden : force;
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    $("menuName").textContent = state.profile.name;
+    $("menuRole").textContent = `${state.profile.position} · ${state.profile.company}`;
+    checkService();
+  }
+}
+
+function openProduct() {
+  const modal = $("productModal");
+  modal.hidden = false;
+  document.body.style.overflow = "hidden";
+  modal.querySelector(".modal-body").scrollTop = 0;
+}
+
+function closeProduct() {
+  $("productModal").hidden = true;
+  document.body.style.overflow = "";
 }
 
 function loadProfile() {
@@ -811,7 +859,55 @@ function bind() {
       showView(view);
     };
   });
-  $("navAbout").onclick = () => toast("AI 线上面试中台：编排引擎 + 多 Agent + 证据绑定评分");
+  $("navAbout").onclick = openProduct;
+
+  // 头像菜单: 点开时补齐身份信息并顺带重探一次服务状态。
+  $("avatarBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleAvatarMenu();
+  });
+  document.querySelectorAll("#avatarMenu .menu-item").forEach((item) => {
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const action = item.dataset.action;
+      toggleAvatarMenu(false);
+      switch (action) {
+        case "profile":
+          showView("profile");
+          break;
+        case "product":
+          openProduct();
+          break;
+        case "redetect":
+          checkService().then((ok) => toast(ok ? "服务已连接" : "服务仍未连接：确认服务在运行"));
+          break;
+        case "switch":
+          state.session = null;
+          state.report = null;
+          showView("profile");
+          $("pfName").focus();
+          toast("修改下面的资料即可切换候选人身份");
+          break;
+      }
+    });
+  });
+  document.addEventListener("click", () => toggleAvatarMenu(false));
+
+  // 产品介绍弹层
+  $("productClose").onclick = closeProduct;
+  $("productCloseBottom").onclick = closeProduct;
+  $("productScrim").onclick = closeProduct;
+  $("productCta").onclick = () => {
+    closeProduct();
+    renderOverview();
+    showView("overview");
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeProduct();
+      toggleAvatarMenu(false);
+    }
+  });
 
   $("btnContinuePrep").onclick = () => {
     if (prepCompletedSteps() >= 5) { startInterview(); return; }
@@ -843,4 +939,4 @@ function bind() {
 loadProfile();
 bind();
 renderOverview();
-checkService();
+startServiceWatch();

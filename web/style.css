@@ -25,6 +25,13 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性必须真的生效。
+   浏览器对 [hidden] 的默认样式是 display:none, 但它的优先级低于任何作者
+   样式 —— 只要某个类写了 display:grid / inline-flex, hidden 就会失效,
+   元素永远显示。这个坑很隐蔽: DOM 读出来 hidden=true, 页面上却明明白白
+   摆着, 排查时很容易先怀疑逻辑而不是样式。 */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -69,6 +76,74 @@ p { margin: 0; }
   display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
   background: var(--dark); color: #fff; font-size: 13px;
 }
+
+/* ---------- 头像菜单 ---------- */
+.avatar-wrap { position: relative; }
+.avatar-btn {
+  background: none; border: 0; padding: 0; border-radius: 50%;
+  line-height: 0; transition: box-shadow .15s;
+}
+.avatar-btn:hover { box-shadow: 0 0 0 3px var(--line-2); }
+.avatar-btn[aria-expanded="true"] .avatar { background: #000; }
+
+.menu {
+  position: absolute; right: 0; top: calc(100% + 10px); z-index: 20;
+  min-width: 232px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 12px 32px rgba(20, 19, 19, .1);
+}
+.menu-head {
+  padding: 10px 12px 12px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-2);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.menu-head strong { font-size: 14.5px; }
+.menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 10px 12px; border: 0; border-radius: 8px;
+  background: none; color: var(--ink); font-size: 14px;
+}
+.menu-item:hover { background: var(--line-2); }
+.menu-item[data-action="redetect"] { color: var(--ink-2); }
+
+/* ---------- 产品介绍弹层 ---------- */
+.modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; }
+.modal-scrim { position: absolute; inset: 0; background: rgba(20, 19, 19, .45); }
+.modal-card {
+  position: relative; width: min(760px, 100%); max-height: 86vh;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 18px; overflow: hidden;
+  box-shadow: 0 24px 60px rgba(20, 19, 19, .22);
+}
+.modal-close {
+  position: absolute; top: 14px; right: 16px; z-index: 2;
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-2); font-size: 18px; line-height: 1;
+}
+.modal-close:hover { background: var(--line-2); color: var(--ink); }
+.modal-body { padding: 34px 34px 28px; max-height: 86vh; overflow-y: auto; }
+.modal-body .display { font-size: 30px; }
+
+.doc { border-top: 1px solid var(--line-2); padding-top: 20px; margin-top: 24px; }
+.doc h2 { font-size: 17px; margin-bottom: 8px; }
+.doc p { color: var(--ink-2); font-size: 14px; }
+.doc-list { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 14px; }
+.doc-list li { margin-bottom: 6px; }
+.doc-list b, .doc p b { color: var(--ink); }
+.doc-steps {
+  margin: 12px 0 0; padding: 0; list-style: none;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;
+}
+.doc-steps li {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px;
+  padding: 10px 12px; font-size: 13.5px; display: flex; flex-direction: column; gap: 2px;
+}
+.doc-steps b { font-size: 14px; }
+.doc-steps span { color: var(--ink-2); font-size: 13px; }
+.doc-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+.doc-table th, .doc-table td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line-2); }
+.doc-table th { color: var(--ink-2); font-weight: 500; font-size: 13px; }
 
 /* ---------- 布局 ---------- */
 main { max-width: 1060px; margin: 0 auto; padding: 44px 24px 96px; }
