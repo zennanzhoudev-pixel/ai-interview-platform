@@ -39,13 +39,16 @@ type Session struct {
 	Company         string
 	CandidateName   string
 	InterviewerName string
-	Round           int
-	Minutes         int
-	Stage           string
-	Status          SessionStatus
-	Recommendation  string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ResumeJSON 是结构化简历实体的 JSON, 由解析器产出、带原文偏移。
+	// 它是"追问能引用简历原话"的数据基础。
+	ResumeJSON     []byte
+	Round          int
+	Minutes        int
+	Stage          string
+	Status         SessionStatus
+	Recommendation string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Turn 是一次问答的持久化视图。

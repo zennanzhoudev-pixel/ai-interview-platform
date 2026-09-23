@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/resume"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 )
 
@@ -412,5 +413,30 @@ func TestDefaultProbeStillUsesKeywordMissing(t *testing.T) {
 	}
 	if strings.Contains(d.Question, "参考答案里强调") {
 		t.Fatalf("未启用检索规划器时不应出现参考答案字样: %q", d.Question)
+	}
+}
+
+// 简历里恰好写到了参考答案要追问的要点时, 追问应引用简历原话 —— 原文定位。
+func TestProbeCitesResumeQuoteWhenPresent(t *testing.T) {
+	eng := NewEngine(DefaultPlan(time.Minute), DefaultBank(), time.Minute)
+	res := resume.NewRuleExtractor().Extract("我用过 ZSet 做索引, 处理过内存增长与大 key 分片的问题。")
+	eng.SetResume(res)
+
+	q := eng.ragProbeQuestion(
+		Question{ID: "q_resume_zset", Stage: StageResumeDeepDive,
+			Competency: "project_depth", MaxProbe: 2, Importance: ImportanceHigh},
+		scoring.Result{Missing: []string{"内存"}},
+		1,
+		Probe{Focus: "内存", Reference: "内存增长、过期清理与大 key 分片"},
+	)
+	if !strings.Contains(q.Text, "你在简历里写到") {
+		t.Fatalf("简历里有该要点时应引用简历原话: %q", q.Text)
+	}
+}
+
+func TestResumeQuoteAbsentWithoutResume(t *testing.T) {
+	eng := NewEngine(DefaultPlan(time.Minute), DefaultBank(), time.Minute)
+	if got := eng.resumeQuoteFor("内存增长与大 key 分片"); got != "" {
+		t.Fatalf("没有简历时不应有引用: %q", got)
 	}
 }

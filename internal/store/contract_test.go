@@ -26,6 +26,7 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 			Stage: "GREETING", CreatedAt: base,
 			Position: "高级后端工程师", Company: "云杉科技",
 			CandidateName: "陈雨", InterviewerName: "林澈",
+			ResumeJSON: []byte(`{"entities":[]}`),
 		}); err != nil {
 			t.Fatalf("创建会话失败: %v", err)
 		}
@@ -43,6 +44,9 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 		if got.Position != "高级后端工程师" || got.Company != "云杉科技" ||
 			got.CandidateName != "陈雨" || got.InterviewerName != "林澈" {
 			t.Fatalf("展示元信息丢失: %+v", got)
+		}
+		if string(got.ResumeJSON) != `{"entities":[]}` {
+			t.Fatalf("简历实体 JSON 丢失: %s", got.ResumeJSON)
 		}
 		if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 			t.Fatalf("时间字段应自动填充: %+v", got)

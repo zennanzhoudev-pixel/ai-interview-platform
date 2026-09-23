@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/resume"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/web"
@@ -127,6 +128,7 @@ func (s *Server) withRateLimit(next http.Handler) http.Handler {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/v1/sessions", s.handleCreateSession)
+	s.mux.HandleFunc("POST /api/v1/resume/parse", s.handleParseResume)
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("GET /api/v1/sessions/{id}/report", s.handleGetReport)
@@ -154,6 +156,7 @@ type createSessionRequest struct {
 	Company          string `json:"company"`
 	CandidateName    string `json:"candidate_name"`
 	InterviewerName  string `json:"interviewer_name"`
+	ResumeText       string `json:"resume_text"`
 	ConsentRecording bool   `json:"consent_recording"`
 }
 
@@ -201,6 +204,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		tenant = s.cfg.TenantID
 	}
 
+	var resumeJSON []byte
+	if strings.TrimSpace(req.ResumeText) != "" {
+		parsed := resume.NewRuleExtractor().Extract(req.ResumeText)
+		if data, err := json.Marshal(parsed); err == nil {
+			resumeJSON = data
+		}
+	}
+
 	sess := store.Session{
 		ID:              newSessionID(),
 		TenantID:        tenant,
@@ -208,6 +219,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Company:         defaultString(req.Company, "示例科技"),
 		CandidateName:   defaultString(req.CandidateName, "候选人"),
 		InterviewerName: defaultString(req.InterviewerName, "林澈"),
+		ResumeJSON:      resumeJSON,
 		Round:           req.Round,
 		Minutes:         req.Minutes,
 		Stage:           string(orchestrator.StageInit),
@@ -248,6 +260,27 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Status:          string(sess.Status),
 		WSURL:           "/ws/interview/" + sess.ID,
 	})
+}
+
+// handleParseResume 解析简历文本并返回带原文偏移的结构化实体。
+//
+// 这是无状态接口: 输入一段简历, 输出技能/项目/时间线, 以及交叉校验告警。
+// 它独立于面试会话存在, 便于候选人在准备阶段先看到"系统读懂了什么"。
+func (s *Server) handleParseResume(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体不是合法 JSON")
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		writeError(w, http.StatusBadRequest, "简历文本不能为空")
+		return
+	}
+
+	parsed := resume.NewRuleExtractor().Extract(req.Text)
+	writeJSON(w, http.StatusOK, parsed)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +551,12 @@ func (s *Server) buildEngine(ctx context.Context, sess store.Session) (*orchestr
 		opts = append(opts, orchestrator.WithProbePlanner(s.cfg.ProbePlanner))
 	}
 	eng := orchestrator.NewEngine(plan, orchestrator.DefaultBank(), total, opts...)
+	if len(sess.ResumeJSON) > 0 {
+		var parsed resume.Resume
+		if err := json.Unmarshal(sess.ResumeJSON, &parsed); err == nil {
+			eng.SetResume(&parsed)
+		}
+	}
 
 	if len(turns) == 0 {
 		return eng, turns, nil

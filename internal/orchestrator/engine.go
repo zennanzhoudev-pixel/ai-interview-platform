@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/resume"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 )
 
@@ -92,6 +94,8 @@ type Engine struct {
 	// planner 决定追问方向。nil 时回落到"关键词缺失"的默认策略,
 	// 保证没有 RAG 依赖时行为与之前完全一致。
 	planner ProbePlanner
+	// resume 是候选人结构化简历, 用于在追问里引用简历原话(原文定位)。
+	resume *resume.Resume
 }
 
 // Option 用于配置引擎。
@@ -164,6 +168,9 @@ func (e *Engine) Finished() bool { return e.finished }
 
 // MaxProbeDepth 返回本场面试实际用到的最深追问层数, 用于校验深度上限。
 func (e *Engine) MaxProbeDepth() int { return e.maxProbeUsed }
+
+// SetResume 设置候选人结构化简历, 让追问能引用简历原话。
+func (e *Engine) SetResume(r *resume.Resume) { e.resume = r }
 
 // Start 进入第一个阶段并抛出首题。
 func (e *Engine) Start() Decision {
@@ -443,7 +450,7 @@ func (e *Engine) decideProbe(parent Question, answer string, res scoring.Result,
 		if !ok {
 			return Question{}, false
 		}
-		return ragProbeQuestion(parent, res, depth, p, e.probedFocus), true
+		return e.ragProbeQuestion(parent, res, depth, p), true
 	}
 	if len(res.Missing) == 0 {
 		return Question{}, false
@@ -452,13 +459,17 @@ func (e *Engine) decideProbe(parent Question, answer string, res scoring.Result,
 }
 
 // ragProbeQuestion 生成一条以参考答案为依据的追问。
-func ragProbeQuestion(parent Question, res scoring.Result, depth int, p Probe, asked map[string]bool) Question {
+// 若候选人简历里恰好写到这个要点, 就优先引用简历原话 —— 这正是"原文定位"。
+func (e *Engine) ragProbeQuestion(parent Question, res scoring.Result, depth int, p Probe) Question {
 	root := rootQuestionID(parent.ID)
 	key := root + "|" + p.Focus
-	repeat := asked[key]
-	asked[key] = true
+	repeat := e.probedFocus[key]
+	e.probedFocus[key] = true
 
 	text := fmt.Sprintf("参考答案里强调了「%s」, 你的回答还没覆盖, 能展开讲讲吗?", p.Reference)
+	if quote := e.resumeQuoteFor(p.Reference); quote != "" {
+		text = fmt.Sprintf("你在简历里写到「%s」, 展开讲讲。", quote)
+	}
 	if repeat || depth >= 2 {
 		text = fmt.Sprintf("换个角度: 如果现在重新设计, 「%s」这一块你会怎么处理?", p.Reference)
 	}
@@ -473,6 +484,37 @@ func ragProbeQuestion(parent Question, res scoring.Result, depth int, p Probe, a
 		Importance:   parent.Importance,
 		MaxProbe:     parent.MaxProbe,
 	}
+}
+
+// resumeQuoteFor 在简历里找与参考答案要点最相关的原话片段。
+func (e *Engine) resumeQuoteFor(refText string) string {
+	if e.resume == nil {
+		return ""
+	}
+	refTokens := rag.Tokenize(refText)
+	best, bestScore := "", 0
+	for _, b := range e.resume.Blocks {
+		blockTokens := rag.Tokenize(b.Text)
+		score := 0
+		for _, a := range refTokens {
+			for _, c := range blockTokens {
+				if a == c {
+					score++
+				}
+			}
+		}
+		if score > bestScore {
+			best, bestScore = b.Text, score
+		}
+	}
+	if bestScore < 2 {
+		return ""
+	}
+	rs := []rune(best)
+	if len(rs) > 48 {
+		best = string(rs[:48]) + "…"
+	}
+	return best
 }
 
 // rootQuestionID 从 "q_resume_zset.p2" 还原出 "q_resume_zset"。

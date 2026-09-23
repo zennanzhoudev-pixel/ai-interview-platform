@@ -397,3 +397,39 @@ func TestUnknownSessionReturns404(t *testing.T) {
 		t.Fatalf("应返回 404, 实际 %v", resp)
 	}
 }
+
+func TestParseResumeEndpoint(t *testing.T) {
+	ts, _ := newTestServer(t)
+	body := `{"text":"陈雨\n高级后端工程师\n\n技能: Go, Redis\n\n项目经历\n- IM 对话平台 2023.06 - 2024.03, 负责 Redis 存储改造与 ZSet 索引优化"}`
+
+	resp, err := http.Post(ts.URL+"/api/v1/resume/parse", "application/json",
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("解析请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("解析应返回 200, 实际 %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Entities []map[string]any `json:"entities"`
+		Warnings []string         `json:"warnings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("解码响应失败: %v", err)
+	}
+	if len(out.Entities) == 0 {
+		t.Fatal("应抽取到结构化实体")
+	}
+
+	var foundZSet bool
+	for _, e := range out.Entities {
+		if e["value"] == "ZSet" && e["start"].(float64) >= 0 {
+			foundZSet = true
+		}
+	}
+	if !foundZSet {
+		t.Fatalf("应抽取到带原文偏移的 ZSet: %+v", out.Entities)
+	}
+}
