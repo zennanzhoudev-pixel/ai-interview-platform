@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: interviewd
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+# 关键告警阈值(设计值, 需按压测结果校准):
+#   interview_first_byte_latency_p95 > 1.5s   -> 首字延迟劣化
+#   interview_session_abort_rate       > 5%    -> 面试中断率异常
+#   llm_schema_validate_fail_rate      > 2%    -> 结构化输出不稳定
+#   llm_cross_check_disagree_rate      > 15%   -> 双模型分歧过高, 需人工复核

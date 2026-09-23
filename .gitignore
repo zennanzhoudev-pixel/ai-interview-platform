@@ -1,0 +1,27 @@
+# 二进制与构建产物
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# 本地环境
+.env
+.env.local
+*.local.yaml
+
+# 音频/录像等大文件不入库
+*.wav
+*.mp3
+*.opus
+*.pcm
+/data/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 依赖缓存
+/vendor/

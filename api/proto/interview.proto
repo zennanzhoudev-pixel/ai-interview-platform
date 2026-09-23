@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package interview.v1;
+
+option go_package = "github.com/zennanzhoudev-pixel/ai-interview-platform/gen/interviewv1";
+
+// 面试编排服务: 网关与编排层之间走双向流, 保证打断(barge-in)可以级联取消。
+service InterviewOrchestrator {
+  rpc StartSession(StartSessionRequest) returns (SessionState);
+  rpc TurnStream(stream TurnEvent) returns (stream OrchestratorEvent);
+  rpc ApplyCheckpoint(CheckpointRequest) returns (SessionState);
+  rpc FinishSession(FinishSessionRequest) returns (ReportSummary);
+}
+
+// 媒体能力: ASR / TTS / VAD。实现层可插拔(云厂商 or 自建)。
+service MediaService {
+  rpc StreamASR(stream AudioFrame) returns (stream ASRResult);
+  rpc StreamTTS(TTSRequest) returns (stream AudioFrame);
+  rpc DetectVAD(stream AudioFrame) returns (stream VADEvent);
+}
+
+message StartSessionRequest {
+  string tenant_id = 1;
+  string candidate_id = 2;
+  string position_id = 3;
+  int32 round = 4; // 1..5
+  string consent_token = 5; // 合规: 候选人录音授权凭证
+}
+
+message SessionState {
+  string session_id = 1;
+  int32 round = 2;
+  string stage = 3; // GREETING / RESUME_DEEP_DIVE / ...
+  int64 remaining_ms = 4;
+  repeated string pending_competencies = 5;
+}
+
+message TurnEvent {
+  string session_id = 1;
+  string turn_id = 2;
+  oneof payload {
+    AudioFrame audio = 3;
+    string text = 4;   // 降级路径: 直接提交文本
+    InterruptSignal interrupt = 5; // 候选人打断 AI
+  }
+}
+
+message InterruptSignal {
+  int64 played_offset_ms = 1; // 已播放位置, 用于截断 AI 的上下文
+}
+
+message OrchestratorEvent {
+  string turn_id = 1;
+  oneof payload {
+    ASRResult partial_asr = 2;
+    string question_text = 3;
+    AudioFrame question_audio = 4;
+    ScoreEvent score = 5;
+    SessionEnd end = 6;
+  }
+}
+
+message AudioFrame {
+  bytes payload = 1;
+  int32 seq = 2;
+  int64 timestamp_ms = 3;
+  string codec = 4; // opus
+}
+
+message ASRResult { string text = 1; bool is_final = 2; int64 start_ms = 3; }
+message TTSRequest { string text = 1; string voice_id = 2; }
+message VADEvent { bool speech_start = 1; int64 at_ms = 2; }
+
+message ScoreEvent {
+  string competency = 1;
+  int32 level = 2; // 1..5
+  double confidence = 3;
+  repeated string evidence = 4;
+}
+
+message SessionEnd { string report_id = 1; string recommendation = 2; }
+
+message CheckpointRequest { string session_id = 1; SessionState state = 2; }
+message FinishSessionRequest { string session_id = 1; string reason = 2; }
+message ReportSummary {
+  string report_id = 1;
+  string recommendation = 2;
+  double confidence = 3;
+}
