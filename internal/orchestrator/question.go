@@ -52,6 +52,13 @@ func (b *Bank) ByID(id string) (Question, bool) {
 // Size 返回题目总数。
 func (b *Bank) Size() int { return len(b.questions) }
 
+// All 返回全部题目(供热词表等跨题目逻辑使用)。
+func (b *Bank) All() []Question {
+	out := make([]Question, len(b.questions))
+	copy(out, b.questions)
+	return out
+}
+
 // DefaultBank 是一份 Go 后端岗位一面的演示题库。
 //
 // 题目围绕"分布式缓存 / 运行时 / 幂等 / 系统设计"四个方向,

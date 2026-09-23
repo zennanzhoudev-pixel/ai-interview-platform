@@ -260,6 +260,7 @@ textarea { resize: vertical; }
 
 .composer { display: flex; gap: 12px; align-items: flex-end; }
 .composer textarea { margin: 0; background: var(--surface); }
+.live-transcript { margin-top: 10px; font-style: italic; min-height: 18px; }
 
 /* ---------- 报告 ---------- */
 .report-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; }

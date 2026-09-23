@@ -31,6 +31,9 @@ const state = {
   session: null,
   report: null,
   ws: null,
+  voiceActive: false,
+  recognition: null,
+  speaking: false,
   preview: false,
   stage: null,
   elapsedBefore: 0,
@@ -485,6 +488,7 @@ function handleMessage(msg) {
         text: msg.text,
         probe: !!msg.probe,
       });
+      speakQuestion(msg.text);
       $("answer").focus();
       break;
 
@@ -510,10 +514,109 @@ function handleMessage(msg) {
 function submitAnswer(ev) {
   ev.preventDefault();
   const text = $("answer").value.trim();
-  if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  addTurn({ who: "我", text, mine: true });
-  state.ws.send(JSON.stringify({ type: "answer", text }));
   $("answer").value = "";
+  submitText(text);
+}
+
+/* ---------------- 语音(浏览器原生识别/合成) ----------------
+ * 零密钥可用: 识别用 webkitSpeechRecognition, 合成用 SpeechSynthesis。
+ * 服务端另有一套"二进制音频 + VAD + 打断"的语音链路, 配了 ASR/TTS 密钥
+ * 才会启用(见 internal/api/audio.go); 这里的是浏览器原生的无密钥路径。
+ * 两者共享同一套面试协议, 前端把识别结果当普通文本答案提交。 */
+
+function voiceSupported() {
+  return typeof window !== "undefined" &&
+    (window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function toggleVoice() {
+  if (!voiceSupported()) {
+    toast("当前浏览器不支持语音识别(请用 Chrome 或 Edge)");
+    return;
+  }
+  if (state.voiceActive) {
+    stopVoice();
+    return;
+  }
+  startVoice();
+}
+
+function startVoice() {
+  const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new R();
+  rec.lang = "zh-CN";
+  rec.continuous = false;
+  rec.interimResults = true;
+
+  rec.onresult = (e) => {
+    let interim = "";
+    let final = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t;
+      else interim += t;
+    }
+    if (interim) {
+      // 一旦检测到用户说话, 立刻打断 AI 播报 —— 这是前端的 barge-in。
+      if (state.speaking) speechSynthesis.cancel();
+      state.speaking = false;
+      const el = $("liveTranscript");
+      el.hidden = false;
+      el.textContent = "识别中… " + interim;
+    }
+    if (final) {
+      $("liveTranscript").textContent = "已识别: " + final;
+      submitText(final);
+      stopVoice();
+    }
+  };
+  rec.onerror = () => {
+    $("liveTranscript").hidden = true;
+    stopVoice();
+  };
+  rec.onend = () => {
+    if (state.voiceActive && !state.speaking) {
+      try { rec.start(); } catch (_) { /* 忽略连续会话重启失败 */ }
+    }
+  };
+
+  state.recognition = rec;
+  state.voiceActive = true;
+  $("btnVoice").textContent = "停止语音";
+  $("btnVoice").classList.add("primary");
+  $("btnVoice").classList.remove("outline");
+  try { rec.start(); } catch (_) { /* 权限被拒时由 onerror 兜底 */ }
+}
+
+function stopVoice() {
+  state.voiceActive = false;
+  if (state.recognition) {
+    try { state.recognition.stop(); } catch (_) { /* ignore */ }
+    state.recognition = null;
+  }
+  $("btnVoice").textContent = "语音";
+  $("btnVoice").classList.remove("primary");
+  $("btnVoice").classList.add("outline");
+}
+
+function submitText(text) {
+  const t = String(text || "").trim();
+  if (!t || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  addTurn({ who: "我", text: t, mine: true });
+  state.ws.send(JSON.stringify({ type: "answer", text: t }));
+}
+
+function speakQuestion(text) {
+  if (!state.voiceActive || !("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  const zh = speechSynthesis.getVoices().find((v) => v.lang && v.lang.startsWith("zh"));
+  if (zh) u.voice = zh;
+  u.onstart = () => { state.speaking = true; };
+  u.onend = () => { state.speaking = false; };
+  u.onerror = () => { state.speaking = false; };
+  speechSynthesis.speak(u);
 }
 
 function previewRoom() {
@@ -678,6 +781,7 @@ function bind() {
   $("btnPreviewRoom").onclick = previewRoom;
   $("prepBack").onclick = () => { renderOverview(); showView("overview"); };
   $("formAnswer").addEventListener("submit", submitAnswer);
+  $("btnVoice").addEventListener("click", toggleVoice);
   $("answer").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("formAnswer").requestSubmit();
   });

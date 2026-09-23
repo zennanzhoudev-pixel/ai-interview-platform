@@ -128,8 +128,10 @@
       <form class="composer" id="formAnswer">
         <textarea id="answer" rows="2"
           placeholder="用键盘作答。语音链路（VAD / 流式识别 / 打断）已在后端实现并测试，麦克风采集是最后一段待接的线。"></textarea>
+        <button class="btn outline" type="button" id="btnVoice">语音</button>
         <button class="btn primary" type="submit" id="btnSend">发送</button>
       </form>
+      <p class="live-transcript muted small" id="liveTranscript" hidden></p>
     </section>
 
     <!-- ④ 报告 -->

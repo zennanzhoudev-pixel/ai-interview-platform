@@ -26,6 +26,7 @@ import (
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/llm"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
@@ -41,7 +42,13 @@ func main() {
 	serve := flag.String("serve", "", "启动 Web 服务, 例如 :8080; 留空则只跑离线模拟")
 	mysqlDSN := flag.String("mysql-dsn", os.Getenv("MYSQL_DSN"), "MySQL DSN; 留空使用内存存储")
 	redisAddr := flag.String("redis-addr", os.Getenv("REDIS_ADDR"), "Redis 地址; 留空则不启用会话快照")
+	selftest := flag.Bool("selftest", false, "联调自检: 探测已配置的 LLM/TTS/Embedding 是否可用")
 	flag.Parse()
+
+	if *selftest {
+		runSelfTest(log.New(os.Stderr, "[interviewd] ", log.LstdFlags))
+		return
+	}
 
 	if *serve != "" {
 		if err := runServer(*serve, *mysqlDSN, *redisAddr); err != nil {
@@ -307,12 +314,15 @@ func runServer(addr, mysqlDSN, redisAddr string) error {
 	if err != nil {
 		return err
 	}
+	asr, tts := buildMediaProviders(logger)
 
 	srv := api.NewServer(api.Config{
 		Store:        sessionStore,
 		Checkpoint:   ckpt,
 		Scorers:      scorerFactory,
 		ProbePlanner: planner,
+		ASR:          asr,
+		TTS:          tts,
 		Logger:       logger,
 	})
 
@@ -453,4 +463,98 @@ func buildProbePlanner(logger *log.Logger) (orchestrator.ProbePlanner, error) {
 		return nil, fmt.Errorf("构建参考题库检索器失败: %w", err)
 	}
 	return orchestrator.NewRAGProbePlanner(bank, retriever), nil
+}
+
+// buildMediaProviders 从环境变量组装语音识别与合成提供方。
+//
+// 语音模式是"显式 opt-in": 只有配了真实密钥才启用服务端 ASR/TTS,
+// 否则前端回落到浏览器自带的识别与合成。既不会把不存在的语音能力假装成
+// 可用, 也不会让只想跑文字版的人被一堆密钥挡住。
+func buildMediaProviders(logger *log.Logger) (media.ASRProvider, media.TTSProvider) {
+	var asr media.ASRProvider
+	var tts media.TTSProvider
+
+	if key := os.Getenv("ASR_API_KEY"); key != "" {
+		asr = &media.OpenAIASR{
+			BaseURL: os.Getenv("ASR_BASE_URL"),
+			APIKey:  key,
+			Model:   os.Getenv("ASR_MODEL"),
+		}
+		logger.Print("语音识别已启用(OpenAI 兼容 /audio/transcriptions)")
+	}
+	if key := os.Getenv("TTS_API_KEY"); key != "" {
+		tts = &media.OpenAITTS{
+			BaseURL: os.Getenv("TTS_BASE_URL"),
+			APIKey:  key,
+			Model:   os.Getenv("TTS_MODEL"),
+		}
+		logger.Print("语音合成已启用(OpenAI 兼容 /audio/speech)")
+	}
+	if asr == nil || tts == nil {
+		logger.Print("语音模式未启用(需同时配置 ASR_API_KEY 与 TTS_API_KEY); 前端回落到浏览器识别/合成")
+	}
+	return asr, tts
+}
+
+// runSelfTest 探测已配置的外部能力, 输出一份联调报告。
+//
+// 它解决的是"配了密钥却不知道通没通"这个最常见的联调痛点:
+// 在正式开面之前先把每个上游 ping 一遍, 而不是让第一场面试替你做冒烟。
+func runSelfTest(logger *log.Logger) {
+	logger.Print("联调自检开始")
+
+	if cfg := llm.FromEnv(); cfg.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		start := time.Now()
+		_, err := llm.NewClient(cfg).Chat(ctx,
+			[]llm.Message{{Role: "user", Content: "ping"}}, llm.WithMaxTokens(1))
+		cancel()
+		if err != nil {
+			logger.Printf("LLM(%s) 失败: %v", cfg.Model, err)
+		} else {
+			logger.Printf("LLM(%s) 正常, 耗时 %s", cfg.Model, time.Since(start).Round(time.Millisecond))
+		}
+	} else {
+		logger.Print("LLM 未配置(LLM_API_KEY)")
+	}
+
+	if key := os.Getenv("EMBEDDING_API_KEY"); key != "" {
+		emb := rag.NewOpenAIEmbedder(os.Getenv("EMBEDDING_BASE_URL"), key, os.Getenv("EMBEDDING_MODEL"))
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		v, err := emb.Embed(ctx, "ping")
+		cancel()
+		if err != nil {
+			logger.Printf("Embedding(%s) 失败: %v", emb.Name(), err)
+		} else {
+			logger.Printf("Embedding(%s) 正常, 维度 %d", emb.Name(), len(v))
+		}
+	} else {
+		logger.Print("Embedding 未配置(EMBEDDING_API_KEY)")
+	}
+
+	if key := os.Getenv("TTS_API_KEY"); key != "" {
+		tts := &media.OpenAITTS{BaseURL: os.Getenv("TTS_BASE_URL"), APIKey: key, Model: os.Getenv("TTS_MODEL")}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		start := time.Now()
+		stream, err := tts.Speak(ctx, "你好", media.Voice{})
+		if err != nil {
+			logger.Printf("TTS 失败: %v", err)
+		} else {
+			first := <-stream.Chunks()
+			_ = stream.Close()
+			logger.Printf("TTS 正常, 首块 %d 字节, 耗时 %s",
+				len(first.PCM), time.Since(start).Round(time.Millisecond))
+		}
+		cancel()
+	} else {
+		logger.Print("TTS 未配置(TTS_API_KEY)")
+	}
+
+	if os.Getenv("ASR_API_KEY") != "" {
+		logger.Print("ASR 已配置; 转写接口需要真实音频, 请在正式面试中验证")
+	} else {
+		logger.Print("ASR 未配置(ASR_API_KEY)")
+	}
+
+	logger.Print("自检结束")
 }

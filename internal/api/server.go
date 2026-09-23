@@ -21,6 +21,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/resume"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
@@ -48,7 +49,11 @@ type Config struct {
 	// ProbePlanner 决定追问方向。nil 时回落到"关键词缺失"策略。
 	// 传 RAG 规划器时, 追问会检索参考答案要点、以原文为依据。
 	ProbePlanner orchestrator.ProbePlanner
-	Logger       *log.Logger
+	// ASR / TTS 提供语音面试能力。都非 nil 时, WebSocket 支持二进制音频帧;
+	// 留空则语音模式不可用, 前端回落到浏览器自带的识别与合成。
+	ASR    media.ASRProvider
+	TTS    media.TTSProvider
+	Logger *log.Logger
 	// RateLimitPerSecond 与 RateLimitBurst 控制单机限流。
 	// 留 0 时使用默认值(20/s, 突发 60)。
 	RateLimitPerSecond float64
@@ -476,10 +481,38 @@ func (s *Server) handleInterview(w http.ResponseWriter, r *http.Request) {
 	questionSentAt := time.Now()
 
 	for {
-		var msg clientMessage
-		if err := conn.ReadJSON(&msg); err != nil {
+		mt, data, err := conn.ReadMessage()
+		if err != nil {
 			// 客户端断开(关页面、切网络、手机锁屏)是常态, 不是异常。
-			// 这里不打错误日志, 否则线上日志会被正常断开淹没。
+			return
+		}
+
+		// 第一个二进制帧或显式 start_voice 消息 -> 切到语音模式。
+		// 语音模式需要真实 ASR/TTS 提供方; 未配置时明确告知, 而不是
+		// 假装接受了音频却什么也识别不出来。
+		if mt == websocket.BinaryMessage {
+			if s.cfg.ASR == nil || s.cfg.TTS == nil {
+				_ = conn.WriteJSON(map[string]any{
+					"type": "error", "message": "语音模式未启用: 需要配置 ASR 与 TTS 提供方",
+				})
+				return
+			}
+			s.voiceLoop(ctx, conn, eng, sess, data, s.cfg.ASR, s.cfg.TTS)
+			return
+		}
+
+		var msg clientMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+		if msg.Type == "start_voice" {
+			if s.cfg.ASR == nil || s.cfg.TTS == nil {
+				_ = conn.WriteJSON(map[string]any{
+					"type": "error", "message": "语音模式未启用: 需要配置 ASR 与 TTS 提供方",
+				})
+				continue
+			}
+			s.voiceLoop(ctx, conn, eng, sess, nil, s.cfg.ASR, s.cfg.TTS)
 			return
 		}
 
