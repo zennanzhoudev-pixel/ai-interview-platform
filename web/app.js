@@ -57,6 +57,48 @@ function toast(message) {
   el._t = setTimeout(() => { el.hidden = true; }, 3600);
 }
 
+// fetchJSON 统一处理请求失败的两类情形。
+//
+// 浏览器原生的 "Failed to fetch" 只说"没拿到响应", 不说是服务没起还是网络断了,
+// 对使用者毫无帮助 —— 而这个提示往往出现在"点了开始面试"这种最要命的时刻。
+// 这里把它翻译成能指导下一步动作的话, 并顺带刷新服务状态指示。
+async function fetchJSON(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (_) {
+    setServiceUp(false);
+    throw new Error("无法连接面试服务：服务可能已停止或网络中断。确认服务在运行后重试。");
+  }
+  setServiceUp(true);
+
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = {};
+  }
+  if (!res.ok) {
+    throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
+  }
+  return data;
+}
+
+function setServiceUp(up) {
+  const el = $("serviceStatus");
+  if (el) el.hidden = up;
+}
+
+// checkService 在进页面时先探一次服务可用性, 而不是等到点"开始面试"才发现。
+async function checkService() {
+  try {
+    const res = await fetch("/api/v1/health", { cache: "no-store" });
+    setServiceUp(res.ok);
+  } catch (_) {
+    setServiceUp(false);
+  }
+}
+
 function loadProfile() {
   try {
     const raw = localStorage.getItem("interviewos.profile");
@@ -417,7 +459,7 @@ async function startInterview() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch("/api/v1/sessions", {
+    const data = await fetchJSON("/api/v1/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -431,8 +473,6 @@ async function startInterview() {
         consent_recording: state.prep.consentRecording,
       }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `创建会话失败（${res.status}）`);
 
     state.session = data;
     state.round = data.round;
@@ -701,13 +741,16 @@ function renderReport(rep) {
 async function loadLatestReport() {
   if (state.report) { renderReport(state.report); return; }
   try {
-    const res = await fetch("/api/v1/sessions?limit=1");
-    const data = await res.json();
+    const data = await fetchJSON("/api/v1/sessions?limit=1");
     const first = (data.sessions || [])[0];
     if (!first) { $("repDetail").innerHTML = "<p class='muted small'>还没有面试记录。</p>"; return; }
-    const rep = await fetch(`/api/v1/sessions/${encodeURIComponent(first.session_id)}/report`);
-    if (!rep.ok) { $("repDetail").innerHTML = "<p class='muted small'>这场面试还没有生成报告。</p>"; return; }
-    const payload = await rep.json();
+    let payload;
+    try {
+      payload = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(first.session_id)}/report`);
+    } catch (err) {
+      $("repDetail").innerHTML = `<p class="muted small">${escapeHTML(err.message)}</p>`;
+      return;
+    }
     state.session = first;
     state.report = payload;
     renderReport(payload);
@@ -729,8 +772,7 @@ async function refreshProfile() {
   renderProfileForm();
 
   try {
-    const res = await fetch("/api/v1/sessions?limit=8");
-    const data = await res.json();
+    const data = await fetchJSON("/api/v1/sessions?limit=8");
     const sessions = data.sessions || [];
     $("pfSessions").innerHTML = sessions.length
       ? sessions.map((s) => `
@@ -742,8 +784,7 @@ async function refreshProfile() {
 
     const target = sessions[0];
     if (!target) { $("pfConsents").textContent = "还没有面试记录。"; return; }
-    const cres = await fetch(`/api/v1/sessions/${encodeURIComponent(target.session_id)}/consents`);
-    const cdata = await cres.json();
+    const cdata = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(target.session_id)}/consents`);
     const consents = cdata.consents || [];
     $("pfConsents").innerHTML = consents.length
       ? consents.map((c) => `
@@ -802,3 +843,4 @@ function bind() {
 loadProfile();
 bind();
 renderOverview();
+checkService();

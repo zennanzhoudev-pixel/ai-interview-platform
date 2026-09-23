@@ -109,6 +109,7 @@ main { max-width: 1060px; margin: 0 auto; padding: 44px 24px 96px; }
 .pill.ok, .pill.mint, .pill.live {
   color: var(--accent); background: var(--accent-soft); border-color: transparent;
 }
+.pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
 .pill.live i { animation: blink 1.6s infinite; }
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
 
