@@ -175,6 +175,56 @@ func (e *Engine) Start() Decision {
 //  3. 本阶段是否还有未问的题;
 //  4. 都否, 进入下一阶段。
 func (e *Engine) Submit(answer string, took time.Duration) (Decision, error) {
+	return e.submit(answer, took, nil)
+}
+
+// Pending 返回当前等待回答的问题。
+// 断线重连后用它把问题重新推给候选人, 而不是从头再问一遍。
+func (e *Engine) Pending() (id, text string, ok bool) {
+	if e.cur == nil {
+		return "", "", false
+	}
+	return e.cur.ID, e.cur.Text, true
+}
+
+// Restore 用已记录的问答重放引擎状态, 用于断线重连。
+//
+// 为什么是"重放"而不是"存快照再反序列化": 引擎的状态(阶段进度、
+// 预算消耗、追问深度、已覆盖能力项)是全部历史的函数。与其为每个内部
+// 字段维护序列化, 不如重放历史 —— 代码更少, 而且天然不会出现
+// "快照漏了一个字段导致恢复后行为不一致"这种最难查的问题。
+//
+// 重放时会逐轮校验题目 ID: 如果题库或面试计划变过, 恢复出来的状态
+// 与当初就不是同一场面试了, 这时必须报错而不是硬撑。
+// 已经记录过评分的轮次直接复用原评分, 不重新调用模型 —— 否则每次
+// 重连都会把整场面试的模型额度再烧一遍。
+func (e *Engine) Restore(turns []Turn) error {
+	if e.started {
+		return errors.New("orchestrator: 引擎已启动, 不能恢复历史状态")
+	}
+
+	d := e.Start()
+	for i, want := range turns {
+		if d.Action == ActionFinish {
+			return fmt.Errorf("orchestrator: 重放第 %d 轮时面试已经结束", i+1)
+		}
+		if d.QuestionID != want.QuestionID {
+			return fmt.Errorf(
+				"orchestrator: 第 %d 轮题目不一致(记录 %s, 重放 %s), 题库或面试计划已变更, 无法安全恢复",
+				i+1, want.QuestionID, d.QuestionID)
+		}
+		next, err := e.submit(want.Answer, want.Duration, want.Verdict)
+		if err != nil {
+			return fmt.Errorf("orchestrator: 重放第 %d 轮失败: %w", i+1, err)
+		}
+		d = next
+	}
+	return nil
+}
+
+// submit 是 Submit 的内部实现。
+// preset 非 nil 表示直接采用已有评分, 不再调用评分器。
+func (e *Engine) submit(answer string, took time.Duration, preset *scoring.Verdict) (Decision, error) {
 	if e.finished {
 		return Decision{}, ErrFinished
 	}
@@ -204,7 +254,15 @@ func (e *Engine) Submit(answer string, took time.Duration) (Decision, error) {
 
 	// 只有携带判定要点的考察项才评分。开场寒暄和候选人反问环节不计分,
 	// 否则寒暄内容会被打分并污染整体结论。
-	if len(q.Keywords) > 0 {
+	switch {
+	case len(q.Keywords) == 0:
+		// 非考察项: 不评分
+	case preset != nil:
+		verdict := *preset
+		bindTurnID(&verdict, fmt.Sprintf("t_%03d", turn.Index))
+		turn.Scored = true
+		turn.Verdict = &verdict
+	default:
 		verdict := scoring.CrossCheck(scoring.Answer{
 			QuestionID:   q.ID,
 			Competency:   q.Competency,

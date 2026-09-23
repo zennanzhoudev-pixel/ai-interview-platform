@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 )
 
 type scripted func(questionID string) (string, time.Duration)
@@ -189,4 +191,127 @@ func TestSubmitOnFinishedSessionIsRejected(t *testing.T) {
 	if _, err := engine.Submit("再说一句", time.Second); err != ErrFinished {
 		t.Fatalf("已结束的会话应拒绝提交, 实际错误 %v", err)
 	}
+}
+
+// 断线重连必须能还原出与中断时完全一致的状态, 包括待回答的问题。
+func TestRestoreReproducesSessionState(t *testing.T) {
+	plan := DefaultPlan(45 * time.Minute)
+	bank := DefaultBank()
+
+	original := NewEngine(plan, bank, 45*time.Minute)
+	d := original.Start()
+	for i := 0; i < 3; i++ {
+		next, err := original.Submit("用了 ZSet 和 score, 内存也考虑过。", 2*time.Minute)
+		if err != nil {
+			t.Fatalf("原始会话第 %d 轮失败: %v", i+1, err)
+		}
+		d = next
+	}
+	// 断线时引擎正在等待回答的那个问题
+	pendingQuestionID := d.QuestionID
+	pendingStage := d.Stage
+	if pendingQuestionID == "" {
+		t.Fatal("测试需要断线时仍有待回答的问题")
+	}
+
+	recorded := original.Report().Turns
+
+	restored := NewEngine(plan, bank, 45*time.Minute)
+	if err := restored.Restore(recorded); err != nil {
+		t.Fatalf("恢复失败: %v", err)
+	}
+
+	if restored.Stage() != pendingStage {
+		t.Fatalf("恢复后的阶段应为 %s, 实际 %s", pendingStage, restored.Stage())
+	}
+	id, _, ok := restored.Pending()
+	if !ok {
+		t.Fatal("恢复后应当有一个待回答的问题")
+	}
+	if id != pendingQuestionID {
+		t.Fatalf("恢复后应继续问 %s, 实际 %s", pendingQuestionID, id)
+	}
+
+	gotTurns := restored.Report().Turns
+	if len(gotTurns) != len(recorded) {
+		t.Fatalf("恢复后应有 %d 轮记录, 实际 %d", len(recorded), len(gotTurns))
+	}
+	for i := range recorded {
+		if gotTurns[i].QuestionID != recorded[i].QuestionID {
+			t.Fatalf("第 %d 轮题目不一致: %s vs %s", i+1, gotTurns[i].QuestionID, recorded[i].QuestionID)
+		}
+		if gotTurns[i].Scored != recorded[i].Scored {
+			t.Fatalf("第 %d 轮是否计分不一致", i+1)
+		}
+	}
+}
+
+// 恢复时复用已记录的评分, 不重新调用评分器。
+// 这条约束直接关系到成本: 每次重连都重打一遍分, 会把模型额度烧穿。
+func TestRestoreReusesRecordedVerdictWithoutRescoring(t *testing.T) {
+	plan := DefaultPlan(30 * time.Minute)
+	bank := DefaultBank()
+
+	counting := &countingScorer{inner: scoring.NewKeywordScorer("counting", 0)}
+	original := NewEngine(plan, bank, 30*time.Minute,
+		WithScorers(counting, scoring.NewKeywordScorer("b", 0), nil, 1))
+	_ = original.Start()
+	for i := 0; i < 3; i++ {
+		if _, err := original.Submit("用了 ZSet, score 是权重。", time.Minute); err != nil {
+			t.Fatalf("原始会话第 %d 轮失败: %v", i+1, err)
+		}
+	}
+	callsAfterOriginal := counting.count
+	if callsAfterOriginal == 0 {
+		t.Fatal("原始会话应当调用过评分器")
+	}
+
+	restored := NewEngine(plan, bank, 30*time.Minute,
+		WithScorers(counting, scoring.NewKeywordScorer("b", 0), nil, 1))
+	if err := restored.Restore(original.Report().Turns); err != nil {
+		t.Fatalf("恢复失败: %v", err)
+	}
+	if counting.count != callsAfterOriginal {
+		t.Fatalf("恢复不应重新评分: 原 %d 次, 恢复后 %d 次", callsAfterOriginal, counting.count)
+	}
+}
+
+// 题库或面试计划变更后, 旧记录重放出来的问题会对不上, 必须直接报错。
+func TestRestoreFailsWhenQuestionBankChanged(t *testing.T) {
+	plan := DefaultPlan(45 * time.Minute)
+	original := NewEngine(plan, DefaultBank(), 45*time.Minute)
+	_ = original.Start()
+	for i := 0; i < 3; i++ {
+		if _, err := original.Submit("回答", time.Minute); err != nil {
+			t.Fatalf("第 %d 轮失败: %v", i+1, err)
+		}
+	}
+
+	// 换成一个完全不同的题库
+	changed := NewBank(Question{ID: "q_other", Stage: StageGreeting, Text: "另一个问题"})
+	restored := NewEngine(plan, changed, 45*time.Minute)
+	if err := restored.Restore(original.Report().Turns); err == nil {
+		t.Fatal("题库变更后恢复必须报错, 而不是悄悄换一套题目继续面试")
+	}
+}
+
+func TestRestoreAfterStartIsRejected(t *testing.T) {
+	engine := NewEngine(DefaultPlan(time.Minute), DefaultBank(), time.Minute)
+	_ = engine.Start()
+	if err := engine.Restore(nil); err == nil {
+		t.Fatal("已启动的引擎不应允许恢复")
+	}
+}
+
+// countingScorer 记录评分被调用的次数。
+type countingScorer struct {
+	inner scoring.Scorer
+	count int
+}
+
+func (c *countingScorer) Name() string { return c.inner.Name() }
+
+func (c *countingScorer) Score(a scoring.Answer) scoring.Result {
+	c.count++
+	return c.inner.Score(a)
 }

@@ -8,7 +8,11 @@
 //  3. 命中反例直接降级: 表达流畅不能掩盖认知错误。
 package scoring
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 // Level 是 rubric 的五级能力等级。LevelUnknown 表示"未评分"或"无证据"。
 type Level int
@@ -170,4 +174,36 @@ func (r Result) Enforce() Result {
 type Scorer interface {
 	Name() string
 	Score(a Answer) Result
+}
+
+// UnmarshalJSON 从 JSON 恢复 Result, 并把展示名还原成等级枚举。
+//
+// Level 本身不参与序列化(用 LevelName 更直观、也更稳定), 但恢复时
+// 它必须被还原 —— 否则断线重连后的报告等级会全部变成 0,
+// 而且不会有任何报错, 只会静悄悄地给出一份"全员未评分"的报告。
+func (r *Result) UnmarshalJSON(data []byte) error {
+	type alias Result
+	var aux alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = Result(aux)
+	r.Level = parseLevelName(r.LevelName)
+	return nil
+}
+
+// parseLevelName 把 "L3 熟练" / "L3" / "3" 解析回等级。
+func parseLevelName(name string) Level {
+	trimmed := strings.TrimSpace(name)
+	for i, n := range levelNames {
+		if n == trimmed {
+			return Level(i)
+		}
+	}
+	for _, r := range trimmed {
+		if r >= '1' && r <= '5' {
+			return LevelFromNumber(int(r - '0'))
+		}
+	}
+	return LevelUnknown
 }

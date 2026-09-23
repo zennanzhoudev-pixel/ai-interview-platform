@@ -9,17 +9,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/llm"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 )
 
 func main() {
@@ -28,7 +34,18 @@ func main() {
 	maxTurns := flag.Int("max-turns", 60, "单场最大问答轮数 (安全上限)")
 	out := flag.String("out", "", "报告 JSON 输出路径, 留空则只打印成绩单")
 	strict := flag.Bool("strict", false, "启用更严格的复核模型, 演示双模型分歧链路")
+	serve := flag.String("serve", "", "启动 Web 服务, 例如 :8080; 留空则只跑离线模拟")
+	mysqlDSN := flag.String("mysql-dsn", os.Getenv("MYSQL_DSN"), "MySQL DSN; 留空使用内存存储")
+	redisAddr := flag.String("redis-addr", os.Getenv("REDIS_ADDR"), "Redis 地址; 留空则不启用会话快照")
 	flag.Parse()
+
+	if *serve != "" {
+		if err := runServer(*serve, *mysqlDSN, *redisAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	total := time.Duration(*minutes) * time.Minute
 	plan := orchestrator.DefaultPlan(total)
@@ -255,4 +272,129 @@ func truncate(s string, maxRunes int) string {
 		return s
 	}
 	return string(rs[:maxRunes]) + "..."
+}
+
+// runServer 启动 Web 服务。
+//
+// 存储与评分器都是"可选增强": 没有 MySQL 就用内存, 没有 Redis 就跳过快照,
+// 没有大模型就用规则评分。这样在一台干净的机器上
+// `go run ./cmd/interviewd -serve :8080` 就能跑起完整流程,
+// 而不是先让人去配一堆中间件 —— 后者通常会变成
+// "项目看起来不错, 但从没真正跑起来过"。
+func runServer(addr, mysqlDSN, redisAddr string) error {
+	logger := log.New(os.Stderr, "[interviewd] ", log.LstdFlags)
+
+	sessionStore, closeStore, err := openStore(mysqlDSN, logger)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	ckpt, err := openCheckpoint(redisAddr, logger)
+	if err != nil {
+		return err
+	}
+
+	scorerFactory, err := buildScorerFactory(logger)
+	if err != nil {
+		return err
+	}
+
+	srv := api.NewServer(api.Config{
+		Store:      sessionStore,
+		Checkpoint: ckpt,
+		Scorers:    scorerFactory,
+		Logger:     logger,
+	})
+
+	httpSrv := &http.Server{
+		Addr:              addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		// 写超时留空: 面试是长连接场景, 设了写超时会把长面试从服务端切断。
+	}
+
+	logger.Printf("面试服务已启动: http://localhost%s", addr)
+	return httpSrv.ListenAndServe()
+}
+
+func openStore(mysqlDSN string, logger *log.Logger) (store.SessionStore, func(), error) {
+	if mysqlDSN == "" {
+		logger.Print("未配置 MYSQL_DSN, 使用内存存储(重启后数据丢失, 仅适合本地演示)")
+		return store.NewMemoryStore(), func() {}, nil
+	}
+
+	my, err := store.OpenMySQL(mysqlDSN)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := my.Migrate(ctx); err != nil {
+		_ = my.Close()
+		return nil, nil, err
+	}
+	logger.Print("已连接 MySQL, 表结构已就绪")
+	return my, func() { _ = my.Close() }, nil
+}
+
+func openCheckpoint(redisAddr string, logger *log.Logger) (store.CheckpointStore, error) {
+	if redisAddr == "" {
+		// 快照只是热路径缓存: 没有它, 断线重连仍然能靠重放问答记录完成,
+		// 只是恢复时多读一次数据库。功能不受影响, 所以这里不当作失败。
+		logger.Print("未配置 REDIS_ADDR, 会话快照已禁用(断线重连仍然可用)")
+		return nil, nil
+	}
+
+	client := store.NewRedisClient(redisAddr, os.Getenv("REDIS_PASSWORD"), 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		logger.Printf("Redis 不可用(%v), 已退化为不使用会话快照", err)
+		return nil, nil
+	}
+	logger.Printf("会话快照已启用: %s", redisAddr)
+	return store.NewRedisCheckpointStore(client, "interview:checkpoint:"), nil
+}
+
+// buildScorerFactory 组装评分器组合。
+//
+// 三种情形, 从便宜到贵:
+//  1. 没配大模型: 两个规则评分器(离线可跑, 也是降级底线);
+//  2. 配了一个模型: 主评分 = 大模型(失败自动降级到规则), 复核 = 规则;
+//  3. 配了两个模型: 主与复核都是大模型, 分歧超过容忍度时由仲裁器取中位数。
+func buildScorerFactory(logger *log.Logger) (func() api.Scorers, error) {
+	cfg := llm.FromEnv()
+	if !cfg.Enabled() {
+		logger.Print("未配置 LLM_API_KEY, 使用规则评分器(报告里会标注评分来源)")
+		return api.DefaultScorers, nil
+	}
+
+	primary := scoring.NewChainScorer(
+		scoring.NewLLMScorer(llm.NewClient(cfg)),
+		scoring.NewKeywordScorer("rule-fallback", 0),
+	)
+
+	secondary := scoring.NewChainScorer(scoring.NewKeywordScorer("rule-reviewer", 0))
+	if modelB := os.Getenv("LLM_MODEL_B"); modelB != "" {
+		cfgB := cfg
+		cfgB.Model = modelB
+		secondary = scoring.NewChainScorer(
+			scoring.NewLLMScorer(llm.NewClient(cfgB)),
+			scoring.NewKeywordScorer("rule-reviewer", 0),
+		)
+		logger.Printf("主评分模型 %s, 复核模型 %s", cfg.Model, modelB)
+	} else {
+		logger.Printf("主评分模型 %s, 复核使用规则评分器(设置 LLM_MODEL_B 可启用双模型交叉)",
+			cfg.Model)
+	}
+
+	return func() api.Scorers {
+		return api.Scorers{
+			Primary:   primary,
+			Secondary: secondary,
+			Arbiter:   scoring.NewKeywordScorer("rule-arbiter", 0),
+			Tolerance: 1,
+		}
+	}, nil
 }

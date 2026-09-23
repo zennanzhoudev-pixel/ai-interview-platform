@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 线上面试中台 · InterviewOS</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="pulse"></span>AI 线上面试中台</div>
+    <div class="meta" id="topMeta">编排引擎 · 多 Agent · 证据绑定评分</div>
+  </header>
+
+  <main>
+    <section id="viewSetup" class="view">
+      <h1>开始一场面试</h1>
+      <p class="sub">
+        整场面试由状态机驱动: 开场 → 简历深挖 → 技术基础 → 场景设计 → 候选人反问 → 收尾。
+        引擎按时间预算与能力项覆盖度双约束调度, 追问深度上限 2 层。
+      </p>
+
+      <form id="formSetup" class="card">
+        <div class="grid2">
+          <label>面试轮次
+            <select id="round">
+              <option value="1" selected>第 1 面 · 技术基础（AI 全自动）</option>
+              <option value="2">第 2 面 · 编码算法（AI + 代码抽检）</option>
+              <option value="3">第 3 面 · 系统设计（AI 主持 + 人类终审）</option>
+              <option value="4">第 4 面 · 领域交叉（Copilot 辅助）</option>
+              <option value="5">第 5 面 · HR 价值观（AI 初筛）</option>
+            </select>
+          </label>
+          <label>时长预算（分钟）
+            <input id="minutes" type="number" value="45" min="5" max="120" />
+          </label>
+        </div>
+
+        <label>候选人编号
+          <input id="candidate" value="c_1001" />
+        </label>
+
+        <fieldset>
+          <legend>合规确认</legend>
+          <label class="check">
+            <input type="checkbox" id="consent" checked />
+            我已知悉本轮由 AI 面试官主持, 并同意录音与评分用于招聘评估
+          </label>
+        </fieldset>
+
+        <div class="row">
+          <button type="submit" id="btnStart">开始面试</button>
+          <button type="button" id="btnHistory" class="ghost">历史会话</button>
+        </div>
+        <p class="hint" id="setupHint"></p>
+      </form>
+
+      <div id="history" class="card" hidden></div>
+    </section>
+
+    <section id="viewInterview" class="view" hidden>
+      <div class="card progress">
+        <div class="stage-rail" id="stageRail"></div>
+        <div class="progress-meta">
+          <span id="budgetText">—</span>
+          <span id="timerText">—</span>
+        </div>
+      </div>
+
+      <div id="chat" class="chat"></div>
+
+      <form id="formAnswer" class="composer">
+        <textarea id="answer" rows="2"
+          placeholder="用键盘作答。语音链路(VAD / 流式 ASR / 打断)已在 internal/media 实现并测试, 接麦克风采集是最后一步。"></textarea>
+        <button type="submit" id="btnSend">发送</button>
+      </form>
+    </section>
+
+    <section id="viewReport" class="view" hidden>
+      <div id="report"></div>
+      <div class="row">
+        <button id="btnAgain" class="ghost">再面一场</button>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" hidden></div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

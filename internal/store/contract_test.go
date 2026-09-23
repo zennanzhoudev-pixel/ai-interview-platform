@@ -135,7 +135,7 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 				SessionID: "s3", Index: i, Stage: "TECH_FUNDAMENTAL",
 				QuestionID: "q1", Question: "问题", Answer: "回答",
 				DurationMS: 90000, Scored: true, Level: "L3 熟练", LevelNum: 3, Confidence: 0.8,
-				Evidence: []byte(`[{"quote":"原话"}]`),
+				Verdict: []byte(`{"gap":0,"final":{"level":"L3 熟练"}}`),
 			}); err != nil {
 				t.Fatalf("追加第 %d 轮失败: %v", i, err)
 			}
@@ -156,8 +156,8 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 		if turns[0].LevelNum != 3 || turns[0].Confidence != 0.8 {
 			t.Fatalf("评分字段丢失: %+v", turns[0])
 		}
-		if string(turns[0].Evidence) != `[{"quote":"原话"}]` {
-			t.Fatalf("证据 JSON 丢失: %s", turns[0].Evidence)
+		if string(turns[0].Verdict) != `{"gap":0,"final":{"level":"L3 熟练"}}` {
+			t.Fatalf("评分结论 JSON 丢失: %s", turns[0].Verdict)
 		}
 	})
 

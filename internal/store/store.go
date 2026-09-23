@@ -57,8 +57,11 @@ type Turn struct {
 	LevelNum     int
 	Confidence   float64
 	DegradedFrom string
-	Evidence     []byte // JSON 数组
-	CreatedAt    time.Time
+	// Verdict 是完整评分结论的 JSON。等级/置信度另外拆成了标量列用于
+	// SQL 统计(分数分布监控), 但报告要能精确复现 —— 只存几个标量
+	// 会让断线重连后的报告丢掉分歧、仲裁等过程信息。
+	Verdict   []byte
+	CreatedAt time.Time
 }
 
 // Report 是评估报告的持久化视图。

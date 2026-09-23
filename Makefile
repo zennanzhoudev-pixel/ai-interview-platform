@@ -1,4 +1,4 @@
-.PHONY: help run test vet fmt tidy build docker-up docker-down clean
+.PHONY: help run serve test test-race test-mysql vet fmt tidy build docker-up docker-down clean
 
 GO ?= go
 BIN := bin/interviewd
@@ -9,8 +9,18 @@ help: ## 显示可用命令
 run: ## 本地跑一场模拟文本面试, 输出面试报告 JSON
 	$(GO) run ./cmd/interviewd -round 1 -minutes 45 -out ./bin/report.json
 
+serve: ## 启动 Web 服务(浏览器打开 http://localhost:8080)
+	$(GO) run ./cmd/interviewd -serve :8080
+
 test: ## 跑单元测试
+	$(GO) test ./... -count=1
+
+test-race: ## 跑单元测试(带竞态检测)
 	$(GO) test ./... -race -count=1
+
+test-mysql: ## 跑 MySQL 集成测试(需要先 docker compose up mysql)
+	MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC' \
+		$(GO) test ./internal/store/... -run MySQL -v -count=1
 
 vet: ## 静态检查
 	$(GO) vet ./...

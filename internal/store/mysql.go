@@ -178,9 +178,9 @@ func (m *MySQLStore) AppendTurn(ctx context.Context, t Turn) error {
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	var evidence any
-	if len(t.Evidence) > 0 {
-		evidence = string(t.Evidence)
+	var verdict any
+	if len(t.Verdict) > 0 {
+		verdict = string(t.Verdict)
 	}
 
 	// ON DUPLICATE KEY UPDATE 让重复投递变成无副作用的空操作:
@@ -189,12 +189,12 @@ func (m *MySQLStore) AppendTurn(ctx context.Context, t Turn) error {
 		INSERT INTO qa_turn
 			(session_id, turn_index, stage, question_id, competency, question, answer,
 			 duration_ms, is_probe, scored, level, level_num, confidence,
-			 degraded_from, evidence, created_at)
+			 degraded_from, verdict, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE session_id = session_id`,
 		t.SessionID, t.Index, t.Stage, t.QuestionID, t.Competency, t.Question, t.Answer,
 		t.DurationMS, t.IsProbe, t.Scored, t.Level, t.LevelNum, t.Confidence,
-		t.DegradedFrom, evidence, createdAt.UTC())
+		t.DegradedFrom, verdict, createdAt.UTC())
 	return err
 }
 
@@ -202,7 +202,7 @@ func (m *MySQLStore) ListTurns(ctx context.Context, sessionID string) ([]Turn, e
 	rows, err := m.db.QueryContext(ctx, `
 		SELECT session_id, turn_index, stage, question_id, competency, question, answer,
 		       duration_ms, is_probe, scored, level, level_num, confidence,
-		       degraded_from, evidence, created_at
+		       degraded_from, verdict, created_at
 		FROM qa_turn WHERE session_id=? ORDER BY turn_index`, sessionID)
 	if err != nil {
 		return nil, err
@@ -212,15 +212,15 @@ func (m *MySQLStore) ListTurns(ctx context.Context, sessionID string) ([]Turn, e
 	var out []Turn
 	for rows.Next() {
 		var (
-			t        Turn
-			evidence []byte
+			t       Turn
+			verdict []byte
 		)
 		if err := rows.Scan(&t.SessionID, &t.Index, &t.Stage, &t.QuestionID, &t.Competency,
 			&t.Question, &t.Answer, &t.DurationMS, &t.IsProbe, &t.Scored,
-			&t.Level, &t.LevelNum, &t.Confidence, &t.DegradedFrom, &evidence, &t.CreatedAt); err != nil {
+			&t.Level, &t.LevelNum, &t.Confidence, &t.DegradedFrom, &verdict, &t.CreatedAt); err != nil {
 			return nil, err
 		}
-		t.Evidence = evidence
+		t.Verdict = verdict
 		out = append(out, t)
 	}
 	return out, rows.Err()

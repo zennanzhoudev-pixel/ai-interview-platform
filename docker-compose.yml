@@ -9,7 +9,10 @@ services:
       MYSQL_DATABASE: interview
     ports: ["3306:3306"]
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-    volumes: ["mysql-data:/var/lib/mysql"]
+    volumes:
+      - "mysql-data:/var/lib/mysql"
+      # 建表脚本与代码共用同一份(go:embed 也读它), 避免两份 DDL 不一致
+      - "./internal/store/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s

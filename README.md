@@ -65,21 +65,40 @@ AI 能力   LLM Gateway(多模型路由/降级) | RAG 检索 | 简历解析 | �
 因此可以直接放进 CI 做回归。
 
 ```bash
-# 跑一场 45 分钟的模拟面试, 打印成绩单
+# 启动 Web 服务, 浏览器打开 http://localhost:8080 就能面一场
+make serve
+
+# 离线跑一场模拟面试(不依赖任何外部服务), 打印成绩单
 make run
 
-# 同时导出 JSON 报告
+# 同时导出 JSON 报告 / 观察双模型分歧链路
 go run ./cmd/interviewd -round 3 -minutes 40 -out ./bin/report.json
-
-# 启用更严格的复核模型, 观察"双模型分歧"如何进入报告
 go run ./cmd/interviewd -strict
 
 # 单元测试
 make test
 
-# 本地依赖(MySQL / Redis / ES / Kafka / Jaeger / Prometheus)
+# 可选: 本地依赖(MySQL / Redis / ES / Kafka / Jaeger / Prometheus)
 make docker-up
+
+# 可选: 打开 MySQL 与 Redis 后, 服务自动启用持久化与断线快照
+MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC' \
+REDIS_ADDR=127.0.0.1:6379 \
+go run ./cmd/interviewd -serve :8080
 ```
+
+接入大模型评分(任意 OpenAI 兼容服务, 换 base_url 即可切厂商):
+
+```bash
+LLM_API_KEY=sk-xxx LLM_BASE_URL=https://api.deepseek.com/v1 LLM_MODEL=deepseek-chat \
+  go run ./cmd/interviewd -serve :8080
+
+# 想启用双模型交叉(主 + 复核都是大模型, 分歧时三方仲裁):
+LLM_MODEL_B=gpt-4o-mini LLM_API_KEY=sk-xxx go run ./cmd/interviewd -serve :8080
+```
+
+**没有配置任何外部依赖时, 服务照样能跑**: 存储退化为内存、评分退化为规则匹配、
+快照直接禁用(断线重连改为依赖数据库重放), 报告里会标注每一条评分的来源。
 
 运行输出示例(实测截取):
 
@@ -110,16 +129,27 @@ make docker-up
 ## 仓库结构
 
 ```
-cmd/interviewd/          离线模拟入口: 跑完一场面试并输出报告
-internal/orchestrator/   编排引擎(本项目核心)
+cmd/interviewd/          两个入口: 离线模拟 与 Web 服务(-serve)
+internal/orchestrator/   编排引擎(核心)
   stage.go                 轮次状态机: 阶段顺序、阶段预算、覆盖目标
-  budget.go                时间预算与双约束调度
+  budget.go                时间预算与覆盖度双约束调度
   question.go              题库与问题 DAG 节点定义
-  engine.go                决策主流程 + Checkpoint 友好的纯内存实现
+  engine.go                决策主流程 + Restore(断线重连重放)
 internal/scoring/        评分引擎
   rubric.go                五级 rubric、证据绑定、Scorer 接口
   keyword.go               确定性规则评分器(离线基线 + 降级路径)
+  llmscorer.go             大模型评分器: schema 校验 + 证据反查 + 重试
   crosscheck.go            双模型交叉评分与三方仲裁
+  chain.go                 降级链(大模型失败自动回落规则评分)
+internal/llm/            OpenAI 兼容客户端 + 轻量 JSON schema 校验
+internal/media/          实时音频链路
+  vad.go / endpointer.go   端点检测与三层结束判定
+  asr_openai.go / tts_openai.go  流式适配器(分段增量转写 + 流式合成)
+  local.go                 离线 ASR/TTS, 让整条链路可在 CI 回归
+  session.go               打断级联取消、已播内容回传、静默期
+internal/store/          持久化: 内存 / MySQL / Redis 快照 + 行为契约测试
+internal/api/            HTTP 与 WebSocket 接入层
+web/                     前端(纯 HTML/CSS/JS, 无构建步骤, go:embed)
 api/proto/               gRPC 契约(编排服务 + 媒体服务)
 deployments/             Prometheus 抓取配置与告警阈值
 docs/                    完整设计方案
@@ -192,19 +222,52 @@ func (r Result) Enforce() Result {
 
 ## 路线图
 
-- [x] **Phase 0** 编排引擎 + 评分引擎 + 离线模拟(本仓库当前状态)
-- [ ] **Phase 1** 语音化: 流式 ASR/TTS + VAD 端点检测 + 打断级联取消 + Redis Checkpoint
-- [ ] **Phase 2** 多 Agent 拆分 + RAG 参考题库 + 简历结构化与原文定位
-- [ ] **Phase 3** 多租户 / RBAC / 审计日志 / 限流降级 / Jaeger 全链路 / 校准集回归平台
-- [ ] **Phase 4** 在线编程与代码沙箱、面试官 Copilot、反作弊引擎、数字人
+- [x] **Phase 0** 编排引擎 + 评分引擎 + 离线模拟
+- [x] **Phase 1** 实时音频链路: VAD 端点检测 + 流式 ASR/TTS + 打断级联取消
+- [x] **Phase 2** 大模型评分: 结构化输出 + 证据反查 + 双模型交叉 + 失败降级
+- [x] **Phase 3** 持久化与接入层: MySQL / Redis / 内存三套存储 + Web 服务 + 前端界面 + 断线重连
+- [ ] **Phase 4** RAG 参考题库(BM25 + 向量 + RRF + Rerank)、简历结构化、在线编程沙箱
+- [ ] **Phase 5** 多租户 RBAC、审计日志、限流降级、Jaeger 全链路、校准集回归平台
 
-### 当前实现边界
+### 已实现能力
 
-为了避免夸大: 本仓库目前是**编排与评分内核 + 完整设计方案**。
-ASR / TTS / 大模型 / 数据库尚未接入, `scriptedAnswer` 仍是脚本化回答,
-`KeywordScorer` 是规则评分器而非大模型评分器。
+| 能力 | 实现位置 | 验证方式 |
+|---|---|---|
+| 轮次状态机 + 问题 DAG 双层编排 | `internal/orchestrator` | 单元测试断言阶段流转、追问深度上限 |
+| 时间预算与覆盖度双约束调度 | `internal/orchestrator/budget.go` | 长回答挤占预算时报告覆盖缺口 |
+| 断线重连(重放已落库问答) | `Engine.Restore` | 测试断言恢复后阶段/待答问题/统计一致 |
+| VAD 端点检测(能量 + 过零率, 噪声底自适应) | `internal/media/vad.go` | 合成音频验证起止帧、噪声不误触发 |
+| 语义 + 静音 + 超时三层端点判定 | `internal/media/endpointer.go` | 逐条覆盖结束原因 |
+| 流式 ASR / TTS(OpenAI 兼容 + 离线实现) | `internal/media/*_openai.go` | httptest 起真 HTTP 服务验证分片、鉴权、取消 |
+| 打断级联取消 + 已播内容回传 + 静默期 | `internal/media/session.go` | 断言 context 穿透到 TTS 层、无流泄漏、半句不计入已听 |
+| 大模型评分(结构化输出 + Schema 校验) | `internal/scoring/llmscorer.go` | 模拟越界/编造证据/上游故障等情形 |
+| 证据反查(引用的原话必须在回答里) | `internal/scoring/llmscorer.go` | 编造证据被丢弃并使整条评分作废 |
+| 双模型交叉 + 三方仲裁 | `internal/scoring/crosscheck.go` | 容忍范围内取保守值, 超阈值仲裁 |
+| 失败降级(大模型 → 规则) | `internal/scoring/chain.go` | 降级可见, 报告里出 `degraded_scores` |
+| MySQL / Redis / 内存三套存储 | `internal/store` | 一套行为契约测试覆盖三个实现 |
+| Web 服务 + 前端 + 断线重连 | `internal/api`, `web/` | 端到端 WebSocket 跑完整场面试 |
 
-这些替换点的接口都已经定好(`scoring.Scorer`、`Bank`), 属于 Phase 1 与 Phase 2 的工作。
+### 当前边界(不夸大)
+
+以下部分**尚未实现**, 请不要在简历或面试里说成已完成:
+
+- **RAG 参考题库检索**: 设计与数据模型已定, 但 BM25 / 向量 / RRF / Rerank 尚未接入,
+  当前的追问方向来自题目自带的判定要点而非检索。
+- **简历解析与原文定位**: 未实现, `resume_entity` 表只存在于设计文档。
+- **浏览器麦克风采集**: 音频链路的组件层(VAD / ASR / TTS / 打断)已实现并测试,
+  但前端目前是文本作答, 麦克风采集与音频回放是最后一段待接的线。
+- **真实厂商 ASR/TTS 联调**: 适配器走的是 OpenAI 兼容协议, 只经过 httptest 验证,
+  未用真实密钥跑过端到端。
+- **多租户 RBAC / 审计日志落库 / 限流降级**: 表结构已定义, 代码未实现。
+- **在线编程与代码沙箱**: 未实现。
+
+MySQL 集成测试需要真实数据库, 默认跳过:
+
+```bash
+docker compose up -d mysql
+MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC' \
+  go test ./internal/store/... -run MySQL -v
+```
 
 ---
 

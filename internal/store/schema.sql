@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS qa_turn (
   level_num     INT          NOT NULL DEFAULT 0 COMMENT '1..5, 便于统计',
   confidence    DOUBLE       NOT NULL DEFAULT 0,
   degraded_from VARCHAR(255) NOT NULL DEFAULT '' COMMENT '非空表示来自备用评分器',
-  evidence      JSON         NULL COMMENT '证据片段(原话 + 时间戳)',
+  verdict       JSON         NULL COMMENT '完整评分结论(含证据), 保证报告可复现',
   created_at    DATETIME(3)  NOT NULL,
   PRIMARY KEY (session_id, turn_index),
   KEY idx_competency (session_id, competency)
