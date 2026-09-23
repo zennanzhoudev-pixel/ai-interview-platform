@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 )
 
@@ -358,5 +360,57 @@ func TestCompetencyLabelFallsBackToKey(t *testing.T) {
 	}
 	if len(CompetencyKeys()) == 0 {
 		t.Fatal("应至少登记一个能力项")
+	}
+}
+
+// 接上 RAG 后, 追问方向应来自检索到的参考答案要点, 而不是题目自带关键词。
+// 这里用一个"答了 score 却漏了内存/复杂度"的回答, 验证追问会以参考答案为依据。
+func TestRAGPlannerGroundsProbeInReference(t *testing.T) {
+	bank := DefaultReferenceBank()
+	retriever, err := bank.BuildRetriever(
+		context.Background(), rag.NewHashingEmbedder(256), rag.NewLocalReranker())
+	if err != nil {
+		t.Fatalf("构建检索器失败: %v", err)
+	}
+
+	plan := DefaultPlan(45 * time.Minute)
+	eng := NewEngine(plan, DefaultBank(), 45*time.Minute,
+		WithProbePlanner(NewRAGProbePlanner(bank, retriever)))
+
+	d := eng.Start() // 开场
+	d, err = eng.Submit("我是候选人, 做过一个 IM 项目。", time.Minute)
+	if err != nil {
+		t.Fatalf("提交失败: %v", err)
+	}
+	if d.QuestionID != "q_resume_zset" {
+		t.Fatalf("第二问应是简历深挖, 实际 %s", d.QuestionID)
+	}
+
+	// 回答覆盖了 score 与 70%, 但漏了内存与复杂度 -> 应触发检索驱动的追问
+	d, err = eng.Submit("用了 ZSet 和 score, 查询 RT 降了 70%。", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("提交失败: %v", err)
+	}
+	if d.Action != ActionProbe {
+		t.Fatalf("漏掉了参考答案里的要点, 应触发追问, 实际 %s", d.Action)
+	}
+	if !strings.Contains(d.Question, "参考答案里强调") {
+		t.Fatalf("追问应以参考答案为依据, 实际 %q", d.Question)
+	}
+}
+
+// 没有检索规划器时, 追问仍走"关键词缺失"策略, 行为不回退。
+func TestDefaultProbeStillUsesKeywordMissing(t *testing.T) {
+	plan := DefaultPlan(45 * time.Minute)
+	eng := NewEngine(plan, DefaultBank(), 45*time.Minute)
+
+	d := eng.Start()
+	d, _ = eng.Submit("我是候选人。", time.Minute)
+	d, _ = eng.Submit("用了 ZSet 和 score。", 2*time.Minute)
+	if d.Action != ActionProbe {
+		t.Fatalf("缺少判定要点时应追问, 实际 %s", d.Action)
+	}
+	if strings.Contains(d.Question, "参考答案里强调") {
+		t.Fatalf("未启用检索规划器时不应出现参考答案字样: %q", d.Question)
 	}
 }

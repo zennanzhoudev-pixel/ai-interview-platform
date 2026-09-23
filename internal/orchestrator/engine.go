@@ -88,6 +88,10 @@ type Engine struct {
 	probedFocus map[string]bool
 	started     bool
 	finished    bool
+
+	// planner 决定追问方向。nil 时回落到"关键词缺失"的默认策略,
+	// 保证没有 RAG 依赖时行为与之前完全一致。
+	planner ProbePlanner
 }
 
 // Option 用于配置引擎。
@@ -108,6 +112,15 @@ func WithScorers(primary, secondary, arbiter scoring.Scorer, tolerance int) Opti
 			tolerance = 0
 		}
 		e.tolerance = tolerance
+	}
+}
+
+// WithProbePlanner 用检索驱动的追问规划器替换默认的"关键词缺失"策略。
+func WithProbePlanner(p ProbePlanner) Option {
+	return func(e *Engine) {
+		if p != nil {
+			e.planner = p
+		}
 	}
 }
 
@@ -291,25 +304,22 @@ func (e *Engine) submit(answer string, took time.Duration, preset *scoring.Verdi
 	}
 
 	// 决策 1: 继续追问?
-	if turn.Scored &&
-		e.probeDepth < q.MaxProbe &&
-		len(turn.Verdict.Final.Missing) > 0 &&
-		e.budget.ShouldProbe(q.Importance) {
-
-		e.probeDepth++
-		if e.probeDepth > e.maxProbeUsed {
-			e.maxProbeUsed = e.probeDepth
+	if turn.Scored && e.probeDepth < q.MaxProbe && e.budget.ShouldProbe(q.Importance) {
+		if probe, ok := e.decideProbe(q, answer, turn.Verdict.Final, e.probeDepth); ok {
+			e.probeDepth++
+			if e.probeDepth > e.maxProbeUsed {
+				e.maxProbeUsed = e.probeDepth
+			}
+			e.cur = &probe
+			return Decision{
+				Action:     ActionProbe,
+				Stage:      e.stage,
+				QuestionID: probe.ID,
+				Question:   probe.Text,
+				IsProbe:    true,
+				Turn:       &turn,
+			}, nil
 		}
-		probe := probeFor(q, turn.Verdict.Final, e.probeDepth, e.probedFocus)
-		e.cur = &probe
-		return Decision{
-			Action:     ActionProbe,
-			Stage:      e.stage,
-			QuestionID: probe.ID,
-			Question:   probe.Text,
-			IsProbe:    true,
-			Turn:       &turn,
-		}, nil
 	}
 
 	// 决策 2: 当前阶段收口?
@@ -412,6 +422,45 @@ func probeFor(parent Question, res scoring.Result, depth int, asked map[string]b
 			// 同一个点被追问到第二层时换一种问法, 而不是把原话重复一遍。
 			text = fmt.Sprintf("换个角度问: 如果现在重新设计, %s 这一块你会怎么处理?", focus)
 		}
+	}
+
+	return Question{
+		ID:           fmt.Sprintf("%s.p%d", parent.ID, depth),
+		Stage:        parent.Stage,
+		Competency:   parent.Competency,
+		Text:         text,
+		Keywords:     append([]string(nil), res.Missing...),
+		AntiPatterns: parent.AntiPatterns,
+		Importance:   parent.Importance,
+		MaxProbe:     parent.MaxProbe,
+	}
+}
+
+// decideProbe 决定追问方向: 有检索规划器时用它, 否则走默认的关键词缺失策略。
+func (e *Engine) decideProbe(parent Question, answer string, res scoring.Result, depth int) (Question, bool) {
+	if e.planner != nil {
+		p, ok := e.planner.PlanProbe(parent, answer, res)
+		if !ok {
+			return Question{}, false
+		}
+		return ragProbeQuestion(parent, res, depth, p, e.probedFocus), true
+	}
+	if len(res.Missing) == 0 {
+		return Question{}, false
+	}
+	return probeFor(parent, res, depth, e.probedFocus), true
+}
+
+// ragProbeQuestion 生成一条以参考答案为依据的追问。
+func ragProbeQuestion(parent Question, res scoring.Result, depth int, p Probe, asked map[string]bool) Question {
+	root := rootQuestionID(parent.ID)
+	key := root + "|" + p.Focus
+	repeat := asked[key]
+	asked[key] = true
+
+	text := fmt.Sprintf("参考答案里强调了「%s」, 你的回答还没覆盖, 能展开讲讲吗?", p.Reference)
+	if repeat || depth >= 2 {
+		text = fmt.Sprintf("换个角度: 如果现在重新设计, 「%s」这一块你会怎么处理?", p.Reference)
 	}
 
 	return Question{

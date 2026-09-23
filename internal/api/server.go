@@ -44,7 +44,10 @@ type Config struct {
 	TenantID   string
 	// Scorers 每次开新会话时调用, 便于把模型消耗按会话归属。
 	Scorers func() Scorers
-	Logger  *log.Logger
+	// ProbePlanner 决定追问方向。nil 时回落到"关键词缺失"策略。
+	// 传 RAG 规划器时, 追问会检索参考答案要点、以原文为依据。
+	ProbePlanner orchestrator.ProbePlanner
+	Logger       *log.Logger
 	// RateLimitPerSecond 与 RateLimitBurst 控制单机限流。
 	// 留 0 时使用默认值(20/s, 突发 60)。
 	RateLimitPerSecond float64
@@ -508,8 +511,13 @@ func (s *Server) buildEngine(ctx context.Context, sess store.Session) (*orchestr
 	plan.Round = sess.Round
 
 	sc := s.cfg.Scorers()
-	eng := orchestrator.NewEngine(plan, orchestrator.DefaultBank(), total,
-		orchestrator.WithScorers(sc.Primary, sc.Secondary, sc.Arbiter, sc.Tolerance))
+	opts := []orchestrator.Option{
+		orchestrator.WithScorers(sc.Primary, sc.Secondary, sc.Arbiter, sc.Tolerance),
+	}
+	if s.cfg.ProbePlanner != nil {
+		opts = append(opts, orchestrator.WithProbePlanner(s.cfg.ProbePlanner))
+	}
+	eng := orchestrator.NewEngine(plan, orchestrator.DefaultBank(), total, opts...)
 
 	if len(turns) == 0 {
 		return eng, turns, nil

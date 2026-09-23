@@ -27,6 +27,7 @@ import (
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/llm"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 )
@@ -302,12 +303,17 @@ func runServer(addr, mysqlDSN, redisAddr string) error {
 	if err != nil {
 		return err
 	}
+	planner, err := buildProbePlanner(logger)
+	if err != nil {
+		return err
+	}
 
 	srv := api.NewServer(api.Config{
-		Store:      sessionStore,
-		Checkpoint: ckpt,
-		Scorers:    scorerFactory,
-		Logger:     logger,
+		Store:        sessionStore,
+		Checkpoint:   ckpt,
+		Scorers:      scorerFactory,
+		ProbePlanner: planner,
+		Logger:       logger,
 	})
 
 	httpSrv := &http.Server{
@@ -420,4 +426,31 @@ func buildScorerFactory(logger *log.Logger) (func() api.Scorers, error) {
 			Tolerance: 1,
 		}
 	}, nil
+}
+
+// buildProbePlanner 构造检索驱动的追问规划器。
+//
+// 默认用本地特征哈希嵌入(词面相似度, 无需密钥); 配了 EMBEDDING_API_KEY
+// 后换成 OpenAI 兼容的语义嵌入。检索管道(BM25 + 向量 + RRF + 精排)不变,
+// 换的只是向量质量。
+func buildProbePlanner(logger *log.Logger) (orchestrator.ProbePlanner, error) {
+	bank := orchestrator.DefaultReferenceBank()
+
+	var emb rag.Embedder = rag.NewHashingEmbedder(256)
+	if key := os.Getenv("EMBEDDING_API_KEY"); key != "" {
+		emb = rag.NewOpenAIEmbedder(
+			os.Getenv("EMBEDDING_BASE_URL"),
+			key,
+			os.Getenv("EMBEDDING_MODEL"),
+		)
+		logger.Print("检索向量使用 OpenAI 兼容嵌入模型(语义召回)")
+	} else {
+		logger.Print("未配置 EMBEDDING_API_KEY, 检索向量使用本地特征哈希(词面相似度)")
+	}
+
+	retriever, err := bank.BuildRetriever(context.Background(), emb, rag.NewLocalReranker())
+	if err != nil {
+		return nil, fmt.Errorf("构建参考题库检索器失败: %w", err)
+	}
+	return orchestrator.NewRAGProbePlanner(bank, retriever), nil
 }
