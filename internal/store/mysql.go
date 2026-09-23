@@ -79,9 +79,11 @@ func (m *MySQLStore) CreateSession(ctx context.Context, s Session) error {
 
 	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO interview_session
-			(session_id, tenant_id, round, minutes, stage, status, recommendation, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		s.ID, defaultTenant(s.TenantID), s.Round, s.Minutes, s.Stage,
+			(session_id, tenant_id, position, company, candidate_name, interviewer_name,
+			 round, minutes, stage, status, recommendation, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.ID, defaultTenant(s.TenantID), s.Position, s.Company, s.CandidateName,
+		s.InterviewerName, s.Round, s.Minutes, s.Stage,
 		string(s.Status), s.Recommendation, s.CreatedAt.UTC(), now)
 	if err != nil {
 		var myErr *mysqldriver.MySQLError
@@ -120,10 +122,11 @@ func (m *MySQLStore) GetSession(ctx context.Context, id string) (Session, error)
 		status string
 	)
 	err := m.db.QueryRowContext(ctx, `
-		SELECT session_id, tenant_id, round, minutes, stage, status,
-		       recommendation, created_at, updated_at
+		SELECT session_id, tenant_id, position, company, candidate_name, interviewer_name,
+		       round, minutes, stage, status, recommendation, created_at, updated_at
 		FROM interview_session WHERE session_id=?`, id).
-		Scan(&s.ID, &s.TenantID, &s.Round, &s.Minutes, &s.Stage, &status,
+		Scan(&s.ID, &s.TenantID, &s.Position, &s.Company, &s.CandidateName, &s.InterviewerName,
+			&s.Round, &s.Minutes, &s.Stage, &status,
 			&s.Recommendation, &s.CreatedAt, &s.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
@@ -140,8 +143,8 @@ func (m *MySQLStore) ListSessions(ctx context.Context, tenantID string, limit in
 		limit = 50
 	}
 	query := `
-		SELECT session_id, tenant_id, round, minutes, stage, status,
-		       recommendation, created_at, updated_at
+		SELECT session_id, tenant_id, position, company, candidate_name, interviewer_name,
+		       round, minutes, stage, status, recommendation, created_at, updated_at
 		FROM interview_session`
 	var args []any
 	if tenantID != "" {
@@ -163,7 +166,8 @@ func (m *MySQLStore) ListSessions(ctx context.Context, tenantID string, limit in
 			s      Session
 			status string
 		)
-		if err := rows.Scan(&s.ID, &s.TenantID, &s.Round, &s.Minutes, &s.Stage,
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.Position, &s.Company, &s.CandidateName,
+			&s.InterviewerName, &s.Round, &s.Minutes, &s.Stage,
 			&status, &s.Recommendation, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}

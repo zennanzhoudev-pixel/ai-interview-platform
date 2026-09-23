@@ -30,15 +30,22 @@ const (
 
 // Session 是一次面试会话的持久化视图。
 type Session struct {
-	ID             string
-	TenantID       string
-	Round          int
-	Minutes        int
-	Stage          string
-	Status         SessionStatus
-	Recommendation string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID       string
+	TenantID string
+	// 展示元信息。它们不是"为了好看"才加的: 报告要能显示"云杉科技 ·
+	// 高级后端工程师 · 第 2 阶段", 候选人界面要能称呼对方名字。
+	// 只有一堆 ID 的报告没人愿意读, 而没人读的报告等于没有报告。
+	Position        string
+	Company         string
+	CandidateName   string
+	InterviewerName string
+	Round           int
+	Minutes         int
+	Stage           string
+	Status          SessionStatus
+	Recommendation  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Turn 是一次问答的持久化视图。

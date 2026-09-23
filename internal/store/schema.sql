@@ -11,6 +11,10 @@
 CREATE TABLE IF NOT EXISTS interview_session (
   session_id     VARCHAR(64)  NOT NULL COMMENT '会话 ID',
   tenant_id      VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '租户, 分库键',
+  position       VARCHAR(128) NOT NULL DEFAULT '' COMMENT '应聘岗位, 用于报告标题',
+  company        VARCHAR(128) NOT NULL DEFAULT '' COMMENT '公司名',
+  candidate_name VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '候选人姓名(展示用, 与 candidate_id 分离)',
+  interviewer_name VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'AI 面试官名, 便于候选人感知"在跟谁说话"',
   round          INT          NOT NULL DEFAULT 1 COMMENT '面试轮次 1..5',
   minutes        INT          NOT NULL DEFAULT 45 COMMENT '时长预算(分钟)',
   stage          VARCHAR(32)  NOT NULL DEFAULT 'INIT' COMMENT '当前阶段',

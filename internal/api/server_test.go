@@ -174,7 +174,7 @@ func TestStaticFrontendIsServed(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	_, _ = buf.ReadFrom(resp.Body)
-	if !strings.Contains(buf.String(), "AI 线上面试中台") {
+	if !strings.Contains(buf.String(), "AI Interview OS") {
 		t.Fatal("首页应返回面试前端页面")
 	}
 }

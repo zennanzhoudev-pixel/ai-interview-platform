@@ -11,14 +11,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
@@ -314,8 +317,28 @@ func runServer(addr, mysqlDSN, redisAddr string) error {
 		// 写超时留空: 面试是长连接场景, 设了写超时会把长面试从服务端切断。
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		logger.Print("收到退出信号, 正在优雅关闭(等待在途面试结束)…")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		// 长连接会让 Shutdown 一直等到面试结束, 因此必须有上限。
+		// 生产环境还应主动向客户端广播"服务即将重启", 让前端立刻重连 ——
+		// 重连后会自动从已落库的问答恢复进度, 候选人几乎无感。
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Printf("优雅关闭超时, 强制退出: %v", err)
+		}
+	}()
+
 	logger.Printf("面试服务已启动: http://localhost%s", addr)
-	return httpSrv.ListenAndServe()
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	logger.Print("已停止")
+	return nil
 }
 
 func openStore(mysqlDSN string, logger *log.Logger) (store.SessionStore, func(), error) {

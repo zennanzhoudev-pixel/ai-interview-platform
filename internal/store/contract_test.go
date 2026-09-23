@@ -24,6 +24,8 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 		if err := s.CreateSession(ctx, Session{
 			ID: "s1", TenantID: "t1", Round: 1, Minutes: 45,
 			Stage: "GREETING", CreatedAt: base,
+			Position: "高级后端工程师", Company: "云杉科技",
+			CandidateName: "陈雨", InterviewerName: "林澈",
 		}); err != nil {
 			t.Fatalf("创建会话失败: %v", err)
 		}
@@ -37,6 +39,10 @@ func storeContract(t *testing.T, newStore func(t *testing.T) SessionStore) {
 		}
 		if got.Status != StatusRunning {
 			t.Fatalf("未指定状态时应默认为 running, 实际 %q", got.Status)
+		}
+		if got.Position != "高级后端工程师" || got.Company != "云杉科技" ||
+			got.CandidateName != "陈雨" || got.InterviewerName != "林澈" {
+			t.Fatalf("展示元信息丢失: %+v", got)
 		}
 		if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 			t.Fatalf("时间字段应自动填充: %+v", got)

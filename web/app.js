@@ -1,34 +1,49 @@
-// 面试前端。刻意不引入任何框架与构建步骤:
-// 这个页面的职责就是"把引擎的状态显示出来, 把候选人的回答送回去",
-// 引入框架只会增加部署面和故障面。
+// AI Interview OS 前端。
+//
+// 刻意不引入框架与构建步骤: 这个页面的职责是"把引擎状态显示出来,
+// 把候选人的回答送回去"。引入框架只会增加部署面和故障面,
+// 而面试场景下页面白屏就是事故。
 
 const STAGES = [
   ["GREETING", "开场"],
-  ["RESUME_DEEP_DIVE", "简历深挖"],
+  ["RESUME_DEEP_DIVE", "经历深挖"],
   ["TECH_FUNDAMENTAL", "技术基础"],
   ["SCENARIO_DESIGN", "场景设计"],
   ["CANDIDATE_QA", "候选人反问"],
   ["WRAP_UP", "收尾"],
 ];
 
+const PREP_STEPS = [
+  ["overview", "面试概览"],
+  ["resume", "简历"],
+  ["device", "设备检查"],
+  ["consent", "数据同意"],
+  ["done", "准备完成"],
+];
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  sessionId: null,
+  profile: { name: "陈雨", company: "示例科技", position: "高级后端工程师", interviewer: "林澈" },
+  prep: { step: 0, resume: "", deviceChecked: false, micLevel: 0, consentRecording: true, consentScoring: true },
   round: 1,
   minutes: 45,
+  session: null,
+  report: null,
+  ws: null,
+  preview: false,
   stage: null,
   elapsedBefore: 0,
   startedAt: 0,
   timer: null,
-  ws: null,
-  awaiting: false,
+  mic: null,
 };
 
-function show(view) {
-  for (const v of ["viewSetup", "viewInterview", "viewReport"]) {
-    $(v).hidden = v !== view;
-  }
+/* ---------------- 基础工具 ---------------- */
+
+function escapeHTML(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function toast(message) {
@@ -36,186 +51,537 @@ function toast(message) {
   el.textContent = message;
   el.hidden = false;
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.hidden = true; }, 3200);
+  el._t = setTimeout(() => { el.hidden = true; }, 3600);
 }
 
-function renderRail(stage) {
-  const rail = $("stageRail");
-  const currentIndex = STAGES.findIndex(([key]) => key === stage);
-  rail.innerHTML = STAGES
-    .map(([key, label], i) => {
-      let cls = "stage";
-      if (currentIndex >= 0 && i < currentIndex) cls += " done";
-      if (key === stage) cls += " current";
-      return `<span class="${cls}">${label}</span>`;
-    })
-    .join("");
+function loadProfile() {
+  try {
+    const raw = localStorage.getItem("interviewos.profile");
+    if (raw) Object.assign(state.profile, JSON.parse(raw));
+  } catch (_) { /* 隐私模式下 localStorage 可能不可用, 忽略即可 */ }
+}
+
+function saveProfile() {
+  try {
+    localStorage.setItem("interviewos.profile", JSON.stringify(state.profile));
+  } catch (_) { /* 同上 */ }
+}
+
+function initials(name) {
+  const chars = Array.from(String(name || "候选人"));
+  return chars.slice(0, 1).join("");
+}
+
+/* ---------------- 视图切换 ---------------- */
+
+function showView(view) {
+  for (const id of ["viewOverview", "viewPrep", "viewRoom", "viewReport", "viewProfile"]) {
+    $(id).hidden = id !== "view" + view[0].toUpperCase() + view.slice(1);
+  }
+  document.querySelectorAll("#navLinks .nav-link").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.view === view);
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  if (view === "profile") refreshProfile();
+}
+
+/* ---------------- 概览 ---------------- */
+
+function greetingText() {
+  const h = new Date().getHours();
+  if (h < 6) return "夜深了。";
+  if (h < 12) return "上午好。";
+  if (h < 18) return "下午好。";
+  return "晚上好。";
+}
+
+function prepCompletedSteps() {
+  let n = 1; // 面试概览默认完成
+  if (state.prep.resume.trim()) n++;
+  if (state.prep.deviceChecked) n++;
+  if (state.prep.consentRecording) n++;
+  if (n === 4) n++; // 前面全过 -> 准备完成
+  return Math.min(n, 5);
+}
+
+function renderOverview() {
+  const p = state.profile;
+  $("greeting").textContent = greetingText() + p.name + "。";
+  const done = prepCompletedSteps();
+  $("overviewLede").textContent = done >= 5
+    ? "准备工作已完成，可以进入面试房间。"
+    : `准备工作已完成 ${done} / 5，还差一点。`;
+  $("navAvatar").textContent = initials(p.name);
+  $("ovAvatar").textContent = (p.company || "OS").slice(0, 2).toUpperCase();
+  $("ovPosition").textContent = p.position;
+  $("ovCompany").textContent = `${p.company} · ${roundLabel(state.round)}`;
+  $("ovDuration").textContent = `${state.minutes} 分钟`;
+  $("ovInterviewer").textContent = `${p.interviewer} · 专业、中性`;
+  $("ovTime").textContent = new Date(Date.now() + 2 * 864e5)
+    .toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const pct = Math.round((done / 5) * 100);
+  $("ovPrepPct").textContent = pct + "%";
+  $("ovPrepBar").style.width = pct + "%";
+  $("ovPrepHint").textContent = done >= 5
+    ? "全部就绪，可以开始。"
+    : "还需完成" + PREP_STEPS.slice(done, 4).map((s) => s[1]).join("、") + "。";
+  $("btnContinuePrep").textContent = done >= 5 ? "进入面试房间" : "继续准备";
+}
+
+function roundLabel(round) {
+  return ["", "第 1 面 · 技术基础", "第 2 面 · 编码算法", "第 3 面 · 系统设计",
+    "第 4 面 · 领域交叉", "第 5 面 · HR 价值观"][round] || `第 ${round} 面`;
+}
+
+/* ---------------- 面试准备 ---------------- */
+
+function renderPrep() {
+  const p = state.profile;
+  $("prepContext").textContent = `${p.company} · ${p.position}`;
+  $("prepStepCount").textContent = `第 ${state.prep.step + 1} / 5 步`;
+
+  $("stepper").innerHTML = PREP_STEPS.map(([key, label], i) => {
+    const cls = i === state.prep.step ? "active" : i < state.prep.step ? "done" : "";
+    return `<li class="${cls}"><span class="num">${i + 1}</span>${label}</li>`;
+  }).join("");
+
+  const panels = {
+    overview: `
+      <span class="pill mint">技术面试</span>
+      <h2 class="panel-title">${escapeHTML(p.position)}</h2>
+      <p class="muted">这场面试约 ${state.minutes} 分钟，由 AI 面试官 ${escapeHTML(p.interviewer)} 主持。
+      面试由状态机驱动，按时间预算与考察项覆盖度调度，最多追问两层。</p>
+      <dl class="facts" style="margin-top:22px">
+        <div><dt>公司</dt><dd>${escapeHTML(p.company)}</dd></div>
+        <div><dt>面试官</dt><dd>${escapeHTML(p.interviewer)} · 专业、中性</dd></div>
+        <div><dt>预计时长</dt><dd>${state.minutes} 分钟</dd></div>
+        <div><dt>阶段</dt><dd>开场、经历、技术、场景、收尾</dd></div>
+      </dl>`,
+
+    resume: `
+      <h2 class="panel-title">简历</h2>
+      <p class="muted">把最能代表你的项目写在这里，面试会围绕它展开追问。</p>
+      <label style="margin-top:16px">简历要点
+        <textarea id="prepResume" rows="6"
+          placeholder="例：IM 对话平台 Redis 存储改造，用 ZSet 索引把查询 RT 降低 70%">${escapeHTML(state.prep.resume)}</textarea>
+      </label>
+      <p class="muted small" style="margin-top:10px">
+        说明：服务端的简历解析与原文定位尚未实现，这里填写的内容只保存在你的浏览器本地，
+        用于面试前自查，不会上传、也不会参与评分。
+      </p>`,
+
+    device: `
+      <h2 class="panel-title">设备检查</h2>
+      <p class="muted">先确认浏览器能访问麦克风。语音链路（端点检测、流式识别、打断）
+      已在服务端实现并测试，本次面试仍以键盘作答。</p>
+      <ul class="checklist" id="deviceList"></ul>
+      <div class="level-meter"><i id="micBar"></i></div>
+      <div class="actions">
+        <button class="btn outline small" id="btnDetect" type="button">检测设备</button>
+        <button class="btn outline small" id="btnMicTest" type="button">测试麦克风（会请求权限）</button>
+      </div>
+      <p class="muted small" id="deviceHint" style="margin-top:10px"></p>`,
+
+    consent: `
+      <h2 class="panel-title">数据同意</h2>
+      <p class="muted">招聘场景下录音与评分属于个人信息处理，需要你明确同意后才会开始。</p>
+      <div style="margin-top:18px">
+        <label class="check"><input type="checkbox" id="ckRecord" ${state.prep.consentRecording ? "checked" : ""} />
+          我同意本轮面试录音，用于面试评估与后续复核</label>
+        <label class="check"><input type="checkbox" id="ckScore" ${state.prep.consentScoring ? "checked" : ""} />
+          我同意系统对我的回答进行自动评分，并知悉本轮由 AI 面试官主持</label>
+      </div>
+      <p class="muted small" style="margin-top:8px">
+        同意记录会带上时间与来源 IP 保存在服务端，你可以在「个人资料」里随时核对。
+      </p>`,
+
+    done: `
+      <span class="pill mint">准备完成</span>
+      <h2 class="panel-title">可以开始了。</h2>
+      <p class="muted">面试过程中你可以随时看到当前阶段、已用时长与追问状态。
+      每个评分结论都会附带你的原话作为证据。</p>
+      <ul class="checklist">
+        <li><span>应聘岗位</span><b>${escapeHTML(p.position)}</b></li>
+        <li><span>公司与面试官</span><b>${escapeHTML(p.company)} · ${escapeHTML(p.interviewer)}</b></li>
+        <li><span>时长预算</span><b>${state.minutes} 分钟</b></li>
+        <li><span>数据同意</span><b>${state.prep.consentRecording ? "已同意" : "未同意"}</b></li>
+      </ul>`,
+  };
+
+  $("prepPanel").innerHTML = panels[PREP_STEPS[state.prep.step][0]] +
+    `<div class="actions">
+       <button class="btn outline" id="prepPrev" ${state.prep.step === 0 ? "disabled" : ""}>上一步</button>
+       <button class="btn primary" id="prepNext">${state.prep.step === 4 ? "进入面试房间" : "继续"}</button>
+     </div>`;
+
+  wirePrepPanel();
+}
+
+function wirePrepPanel() {
+  const prev = $("prepPrev");
+  const next = $("prepNext");
+  if (prev) prev.onclick = () => { state.prep.step = Math.max(0, state.prep.step - 1); renderPrep(); };
+  if (next) next.onclick = () => {
+    if (state.prep.step === 4) {
+      if (!state.prep.consentRecording) {
+        state.prep.step = 3;
+        renderPrep();
+        toast("需要同意录音后才能开始面试");
+        return;
+      }
+      startInterview();
+      return;
+    }
+    state.prep.step = Math.min(4, state.prep.step + 1);
+    renderPrep();
+  };
+
+  const resume = $("prepResume");
+  if (resume) resume.oninput = () => { state.prep.resume = resume.value; };
+
+  const ckRecord = $("ckRecord");
+  if (ckRecord) ckRecord.onchange = () => { state.prep.consentRecording = ckRecord.checked; };
+  const ckScore = $("ckScore");
+  if (ckScore) ckScore.onchange = () => { state.prep.consentScoring = ckScore.checked; };
+
+  const detect = $("btnDetect");
+  if (detect) detect.onclick = detectDevices;
+  const micTest = $("btnMicTest");
+  if (micTest) micTest.onclick = testMicrophone;
+
+  if (PREP_STEPS[state.prep.step][0] === "device") refreshDeviceList();
+}
+
+// detectDevices 只枚举设备, 不申请权限 —— 枚举在未授权时也能拿到设备数量,
+// 而申请权限会弹窗。把"弹窗"留给候选人主动点击的测试按钮,
+// 是这类流程里最基本的礼貌。
+async function detectDevices() {
+  const list = $("deviceList");
+  const hint = $("deviceHint");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    list.innerHTML = `<li><span>浏览器媒体能力</span><b style="color:var(--warn)">不支持</b></li>`;
+    hint.textContent = "当前浏览器不支持媒体设备访问（可能是非 HTTPS 环境或隐私模式）。";
+    return;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const kinds = {
+      audioinput: devices.filter((d) => d.kind === "audioinput").length,
+      audiooutput: devices.filter((d) => d.kind === "audiooutput").length,
+      videoinput: devices.filter((d) => d.kind === "videoinput").length,
+    };
+    state.prep.deviceChecked = true;
+    hint.textContent = "设备枚举完成。正式面试仍以键盘作答，麦克风采集尚未接入。";
+    renderDeviceList(kinds, true);
+  } catch (err) {
+    hint.textContent = "设备枚举失败：" + (err.message || err);
+  }
+}
+
+function refreshDeviceList() {
+  const list = $("deviceList");
+  if (!list) return;
+  list.innerHTML = `<li><span>设备状态</span><b>点击「检测设备」开始</b></li>`;
+}
+
+function renderDeviceList(kinds, ok) {
+  const list = $("deviceList");
+  if (!list) return;
+  const row = (label, value, good) =>
+    `<li><span>${label}</span><b style="color:${good ? "var(--accent)" : "var(--warn)"}">${value}</b></li>`;
+  list.innerHTML =
+    row("麦克风", kinds.audioinput > 0 ? `检测到 ${kinds.audioinput} 个` : "未检测到", kinds.audioinput > 0) +
+    row("扬声器", kinds.audiooutput > 0 ? `检测到 ${kinds.audiooutput} 个` : "未检测到", kinds.audiooutput > 0) +
+    row("摄像头", kinds.videoinput > 0 ? `检测到 ${kinds.videoinput} 个` : "未检测到（本场不需要）", true) +
+    row("浏览器媒体能力", ok ? "可用" : "不可用", ok);
+}
+
+// testMicrophone 是唯一会触发权限弹窗的动作, 因此必须由用户点击触发。
+async function testMicrophone() {
+  const hint = $("deviceHint");
+  const bar = $("micBar");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    hint.textContent = "当前环境不支持麦克风访问。";
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+
+    const buf = new Float32Array(analyser.fftSize);
+    const startedAt = Date.now();
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      if (bar) bar.style.width = Math.min(100, Math.round(rms * 320)) + "%";
+      if (Date.now() - startedAt < 8000) {
+        state.micRaf = requestAnimationFrame(tick);
+      } else {
+        stopMicTest(stream, ctx);
+      }
+    };
+    state.mic = { stream, ctx };
+    tick();
+    hint.textContent = "正在采集 8 秒，请正常说话看电平变化…";
+    state.prep.deviceChecked = true;
+  } catch (err) {
+    hint.textContent = "麦克风不可用：" + (err.message || err);
+  }
+}
+
+function stopMicTest(stream, ctx) {
+  cancelAnimationFrame(state.micRaf);
+  stream.getTracks().forEach((t) => t.stop());
+  if (ctx && ctx.close) ctx.close();
+  state.mic = null;
+  const hint = $("deviceHint");
+  if (hint) hint.textContent = "测试结束，麦克风工作正常。";
+}
+
+/* ---------------- 面试房间 ---------------- */
+
+function renderRoomChrome() {
+  const p = state.profile;
+  $("roomTitle").textContent = `${p.company} · ${p.position}`;
+  $("roomInterviewer").textContent = p.interviewer;
+  $("roomAskLabel").textContent = `AI 面试官 · ${p.interviewer}`;
+  $("roomCandidate").textContent = p.name;
+  $("roomAvatar").textContent = initials(p.interviewer);
+}
+
+function setRoomStatus(text, live) {
+  const el = $("roomStatus");
+  el.innerHTML = `<i></i>${escapeHTML(text)}`;
+  el.classList.toggle("live", !!live);
+}
+
+function renderStage() {
+  const idx = Math.max(0, STAGES.findIndex(([key]) => key === state.stage));
+  $("roomStage").textContent = `${roundLabel(state.round)} · ${idx + 1} / ${STAGES.length}`;
 }
 
 function startTimer() {
   clearInterval(state.timer);
-  const budget = state.minutes * 60;
   const tick = () => {
     const elapsed = state.elapsedBefore + Math.floor((Date.now() - state.startedAt) / 1000);
     const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
     const ss = String(elapsed % 60).padStart(2, "0");
-    $("timerText").textContent = `已用 ${mm}:${ss} / 预算 ${state.minutes}:00`;
-    $("budgetText").textContent = `剩余 ${Math.max(0, Math.floor((budget - elapsed) / 60))} 分钟`;
+    $("roomTimer").textContent = `${mm}:${ss} / ${state.minutes}:00`;
   };
   tick();
   state.timer = setInterval(tick, 1000);
 }
 
-function bubble(role, who, text, extra) {
-  const wrap = document.createElement("div");
-  wrap.className = `msg ${role}`;
-  const whoEl = document.createElement("div");
-  whoEl.className = "who";
-  whoEl.textContent = who;
-  const body = document.createElement("div");
-  body.className = "bubble";
-  body.textContent = text;
-  if (extra) {
-    const extraEl = document.createElement("div");
-    extraEl.className = "scored";
-    extraEl.innerHTML = extra;
-    body.appendChild(extraEl);
-  }
-  wrap.appendChild(whoEl);
-  wrap.appendChild(body);
-  $("chat").appendChild(wrap);
-  wrap.scrollIntoView({ behavior: "smooth", block: "end" });
-  return body;
+function addTurn({ who, text, mine, probe }) {
+  const el = document.createElement("div");
+  el.className = "turn" + (mine ? " me" : "") + (probe ? " probe" : "");
+  el.innerHTML = `<span class="who">${escapeHTML(who)}</span><div class="text">${escapeHTML(text)}</div>`;
+  $("transcript").appendChild(el);
+  el.scrollIntoView({ behavior: "smooth", block: "end" });
+  return el;
 }
 
-function bindWS(sessionId) {
+function attachScore(turnEl, msg) {
+  if (!turnEl) return;
+  const chip = document.createElement("div");
+  chip.className = "score-chip";
+  if (!msg.scored) {
+    chip.innerHTML = `<span>本环节不计分</span>`;
+  } else {
+    const quotes = (msg.evidence || [])
+      .map((e) => `<span class="quote">${escapeHTML(e.quote)}</span>`)
+      .join("");
+    chip.innerHTML =
+      `<span>评分 <b>${escapeHTML(msg.level)}</b></span>` +
+      `<span>置信度 ${Number(msg.confidence).toFixed(2)}</span>` +
+      (msg.degraded ? `<span style="color:var(--warn)">已降级到规则评分</span>` : "") +
+      quotes;
+  }
+  turnEl.appendChild(chip);
+}
+
+async function startInterview() {
+  const p = state.profile;
+  const btn = $("prepNext");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        round: state.round,
+        minutes: state.minutes,
+        candidate_id: "c_" + encodeURIComponent(p.name),
+        candidate_name: p.name,
+        company: p.company,
+        position: p.position,
+        interviewer_name: p.interviewer,
+        consent_recording: state.prep.consentRecording,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `创建会话失败（${res.status}）`);
+
+    state.session = data;
+    state.round = data.round;
+    state.minutes = data.minutes;
+    state.preview = false;
+    $("transcript").innerHTML = "";
+    renderRoomChrome();
+    showView("room");
+    openSocket(data.session_id);
+  } catch (err) {
+    toast(err.message);
+    if (btn) btn.disabled = false;
+  }
+}
+
+function openSocket(sessionId) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/interview/${encodeURIComponent(sessionId)}`);
   state.ws = ws;
+  setRoomStatus("正在建立连接", true);
 
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    handleMessage(msg);
-  };
+  ws.onmessage = (ev) => handleMessage(JSON.parse(ev.data));
   ws.onclose = () => {
-    state.awaiting = false;
+    if (!state.report) setRoomStatus("连接已断开", false);
     $("btnSend").disabled = false;
   };
-  ws.onerror = () => toast("连接异常, 请刷新页面重试");
+  ws.onerror = () => setRoomStatus("连接异常", false);
+  $("btnSend").disabled = false;
 }
 
 function handleMessage(msg) {
   switch (msg.type) {
-    case "state": {
+    case "state":
       state.round = msg.round;
       state.minutes = msg.minutes;
       state.elapsedBefore = msg.elapsed_sec || 0;
       state.startedAt = Date.now();
       state.stage = msg.stage;
-      renderRail(msg.stage);
+      renderRoomChrome();
+      renderStage();
       startTimer();
-      $("topMeta").textContent = `第 ${msg.round} 面 · 会话 ${msg.session_id}` +
-        (msg.resumed ? ` · 已从断点恢复（${msg.turn_count} 轮）` : "");
-      if (msg.resumed) {
-        toast(`已恢复上次进度: 已完成 ${msg.turn_count} 轮问答`);
-      }
+      if (msg.resumed) toast(`已从断点恢复，之前完成 ${msg.turn_count} 轮`);
       break;
-    }
-    case "question": {
+
+    case "question":
       state.stage = msg.stage;
-      renderRail(msg.stage);
-      bubble(msg.probe ? "probe" : "interviewer",
-        msg.probe ? "追问" : "面试官",
-        msg.text,
-        `<span class="tag">第 ${msg.index} 轮 · ${msg.stage}</span>`);
-      state.awaiting = false;
-      $("btnSend").disabled = false;
+      renderStage();
+      setRoomStatus(msg.probe ? "正在追问" : "等待你的回答", true);
+      $("roomQuestion").textContent = msg.text;
+      $("roomTags").textContent = `第 ${msg.index} 轮 · ${msg.probe ? "追问" : "主问题"}`;
+      addTurn({
+        who: `AI 面试官 · ${state.profile.interviewer}`,
+        text: msg.text,
+        probe: !!msg.probe,
+      });
       $("answer").focus();
       break;
-    }
-    case "turn_result": {
-      const last = $("chat").lastElementChild;
-      if (last && last.classList.contains("candidate")) {
-        const extra = document.createElement("div");
-        extra.className = "scored";
-        if (msg.scored) {
-          const evidence = (msg.evidence || [])
-            .map((e) => `<span class="ev">${escapeHTML(e.quote)}</span>`)
-            .join("");
-          extra.innerHTML =
-            `评分 <b>${escapeHTML(msg.level)}</b> · 置信度 ${msg.confidence.toFixed(2)}` +
-            (msg.degraded ? ` · <span style="color:var(--warn)">已降级到规则评分</span>` : "") +
-            evidence;
-        } else {
-          extra.innerHTML = `<span class="tag">本环节不计分</span>`;
-        }
-        last.querySelector(".bubble").appendChild(extra);
-        last.scrollIntoView({ behavior: "smooth", block: "end" });
-      }
+
+    case "turn_result":
+      setRoomStatus("正在评分", false);
+      attachScore($("transcript").querySelector(".turn.me:last-of-type"), msg);
       break;
-    }
-    case "report": {
+
+    case "report":
+      state.report = msg.payload;
+      setRoomStatus("面试结束", false);
       clearInterval(state.timer);
       renderReport(msg.payload);
-      show("viewReport");
+      showView("report");
       break;
-    }
-    case "error": {
+
+    case "error":
       toast(msg.message || "服务端返回错误");
       break;
-    }
   }
 }
 
-function escapeHTML(s) {
-  return String(s || "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function submitAnswer(ev) {
+  ev.preventDefault();
+  const text = $("answer").value.trim();
+  if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  addTurn({ who: "我", text, mine: true });
+  state.ws.send(JSON.stringify({ type: "answer", text }));
+  $("answer").value = "";
 }
 
+function previewRoom() {
+  state.preview = true;
+  state.stage = "TECH_FUNDAMENTAL";
+  state.minutes = state.minutes || 45;
+  $("transcript").innerHTML = "";
+  renderRoomChrome();
+  renderStage();
+  setRoomStatus("预览模式", false);
+  $("roomQuestion").textContent = "请讲讲你如何权衡缓存一致性与服务可用性。";
+  $("roomTags").textContent = "第 3 轮 · 主问题 · 这是预览，不会开始真实面试";
+  $("roomTimer").textContent = "00:00 / 45:00";
+  addTurn({
+    who: `AI 面试官 · ${state.profile.interviewer}`,
+    text: "请讲讲你如何权衡缓存一致性与服务可用性。",
+  });
+  showView("room");
+}
+
+/* ---------------- 报告 ---------------- */
+
 function renderReport(rep) {
-  const dims = (rep.dimensions || []).map((d) => {
+  const p = state.profile;
+  $("repSession").textContent = state.session ? state.session.session_id : "本地报告";
+  $("repPosition").textContent = p.position;
+  $("repMeta").textContent = `${p.company} · ${new Date().toLocaleDateString("zh-CN")}`;
+  $("repScore").textContent = rep.score != null ? rep.score : "—";
+  $("repScoreNote").textContent =
+    "综合评分（各考察项等权平均）。分数用于组织观察，不代表客观结论；" +
+    "只有当每一项都有原话证据支撑时，这个数字才有意义。";
+
+  const dims = rep.dimensions || [];
+  $("repDimensions").innerHTML = dims.map((d) => `
+    <div class="dim-row">
+      <span class="name">${escapeHTML(d.label || d.competency)}</span>
+      <span class="bar"><i style="width:${Math.min(100, d.score)}%"></i></span>
+      <span class="val">${d.score}</span>
+    </div>`).join("");
+
+  const detail = dims.map((d) => {
     const evidence = (d.evidence || [])
-      .map((e) => `<span class="ev">${escapeHTML(e.quote)}</span>`)
+      .map((e) => `<li><span class="quote">${escapeHTML(e.quote)}</span></li>`)
       .join("");
     const concerns = (d.concerns || []).length
-      ? `<div class="concern">待确认要点: ${escapeHTML(d.concerns.join(" / "))}</div>` : "";
+      ? `<p class="concerns">待确认要点：${escapeHTML(d.concerns.join(" / "))}</p>` : "";
     return `
-      <div class="dim">
-        <div class="dim-head">
-          <span class="dim-name">${escapeHTML(d.competency)}</span>
-          <span class="dim-level">${escapeHTML(d.level)} · 置信度 ${Number(d.confidence).toFixed(2)} · ${d.turns} 轮</span>
+      <div class="explain-item">
+        <div class="explain-head">
+          <span class="name">${escapeHTML(d.label || d.competency)}</span>
+          <span class="meta">${escapeHTML(d.level)} · ${d.score} 分 · 置信度 ${Number(d.confidence).toFixed(2)} · ${d.turns} 轮</span>
         </div>
-        <div class="bar"><i style="width:${(d.level_num / 5) * 100}%"></i></div>
-        ${evidence}${concerns}
+        ${evidence ? `<ul class="evidence-list">${evidence}</ul>` : ""}
+        ${concerns}
       </div>`;
   }).join("");
 
-  const flags = (rep.flags || []).map((f) => `<div class="flag">⚠ ${escapeHTML(f)}</div>`).join("");
-  const gaps = (rep.gaps || []).length
-    ? `<div class="flag">未覆盖能力项: ${escapeHTML(rep.gaps.join(" / "))}</div>` : "";
   const s = rep.stats || {};
+  const flags = (rep.flags || []).map((f) => `<div class="flag">${escapeHTML(f)}</div>`).join("");
+  const gaps = (rep.gaps || []).length
+    ? `<div class="flag">未覆盖考察项：${escapeHTML(rep.gaps.join(" / "))}</div>` : "";
 
-  $("report").innerHTML = `
-    <div class="card">
-      <div class="reco">
-        <div>
-          <div class="label">AI 建议结论</div>
-          <div class="badge ${escapeHTML(rep.recommendation)}">${escapeHTML(rep.recommendation)}</div>
-        </div>
-        <div>
-          <div class="label">整体置信度</div>
-          <div class="badge" style="background:transparent;border:1px solid var(--line);color:var(--text)">${Number(rep.confidence).toFixed(2)}</div>
-        </div>
-        <div style="flex:1;min-width:180px">
-          <div class="label">说明</div>
-          <div style="font-size:13px;color:var(--muted)">这是给面试官的参考意见。真实系统里录用决策始终由人来做。</div>
-        </div>
-      </div>
-      ${flags}${gaps}
-    </div>
-
-    <div class="card">
-      <div class="kv">
+  $("repDetail").innerHTML = `
+    ${flags}${gaps}
+    ${detail || "<p class='muted small'>本场没有产生可评分的考察项。</p>"}
+    <div class="card" style="margin-top:22px">
+      <h3 style="font-size:15px;margin-bottom:6px">过程指标</h3>
+      <div class="stats-grid">
         <div>问答轮数<b>${s.turns || 0}</b></div>
         <div>计分轮数<b>${s.scored_turns || 0}</b></div>
         <div>追问轮数<b>${s.probes || 0}</b></div>
@@ -226,90 +592,109 @@ function renderReport(rep) {
         <div>降级评分<b>${s.degraded_scores || 0}</b></div>
         <div>耗时 / 预算<b>${rep.duration_sec || 0}s / ${rep.budget_sec || 0}s</b></div>
       </div>
-    </div>
-
-    <div class="card">
-      <h1 style="font-size:17px;margin:0 0 4px">能力维度</h1>
-      <p class="sub" style="margin-bottom:10px">每个等级都绑定候选人原话作为证据, 可逐条回溯。</p>
-      ${dims || "<p class='sub'>本场没有产生可评分的考察项。</p>"}
     </div>`;
 }
 
-$("formSetup").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const btn = $("btnStart");
-  btn.disabled = true;
-  $("setupHint").textContent = "正在创建会话…";
+async function loadLatestReport() {
+  if (state.report) { renderReport(state.report); return; }
+  try {
+    const res = await fetch("/api/v1/sessions?limit=1");
+    const data = await res.json();
+    const first = (data.sessions || [])[0];
+    if (!first) { $("repDetail").innerHTML = "<p class='muted small'>还没有面试记录。</p>"; return; }
+    const rep = await fetch(`/api/v1/sessions/${encodeURIComponent(first.session_id)}/report`);
+    if (!rep.ok) { $("repDetail").innerHTML = "<p class='muted small'>这场面试还没有生成报告。</p>"; return; }
+    const payload = await rep.json();
+    state.session = first;
+    state.report = payload;
+    renderReport(payload);
+  } catch (err) {
+    $("repDetail").innerHTML = `<p class="muted small">加载失败：${escapeHTML(err.message)}</p>`;
+  }
+}
+
+/* ---------------- 个人资料 ---------------- */
+
+function renderProfileForm() {
+  $("pfName").value = state.profile.name;
+  $("pfCompany").value = state.profile.company;
+  $("pfPosition").value = state.profile.position;
+  $("pfInterviewer").value = state.profile.interviewer;
+}
+
+async function refreshProfile() {
+  renderProfileForm();
 
   try {
-    const res = await fetch("/api/v1/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        round: Number($("round").value),
-        minutes: Number($("minutes").value),
-        candidate_id: $("candidate").value,
-        consent_recording: $("consent").checked,
-      }),
-    });
+    const res = await fetch("/api/v1/sessions?limit=8");
     const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || `创建会话失败 (${res.status})`);
-    }
+    const sessions = data.sessions || [];
+    $("pfSessions").innerHTML = sessions.length
+      ? sessions.map((s) => `
+          <div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line-2)">
+            <span>${escapeHTML(s.session_id)}</span>
+            <span>${escapeHTML(s.position || "")} · ${escapeHTML(s.status)} · ${escapeHTML(s.recommendation || "—")}</span>
+          </div>`).join("")
+      : "还没有面试记录。";
 
-    state.sessionId = data.session_id;
-    state.round = data.round;
-    state.minutes = data.minutes;
-    state.elapsedBefore = 0;
-    $("chat").innerHTML = "";
-    show("viewInterview");
-    bindWS(data.session_id);
-    $("setupHint").textContent = "";
+    const target = sessions[0];
+    if (!target) { $("pfConsents").textContent = "还没有面试记录。"; return; }
+    const cres = await fetch(`/api/v1/sessions/${encodeURIComponent(target.session_id)}/consents`);
+    const cdata = await cres.json();
+    const consents = cdata.consents || [];
+    $("pfConsents").innerHTML = consents.length
+      ? consents.map((c) => `
+          <div>
+            <span>${escapeHTML(c.Scope || c.scope)}</span>
+            <span>${escapeHTML(new Date(c.AgreedAt || c.agreed_at).toLocaleString("zh-CN"))} · ${escapeHTML(c.IP || c.ip || "")}</span>
+          </div>`).join("")
+      : "没有授权记录。";
   } catch (err) {
-    $("setupHint").textContent = err.message;
-  } finally {
-    btn.disabled = false;
+    $("pfSessions").textContent = "加载失败：" + err.message;
   }
-});
+}
 
-$("formAnswer").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const text = $("answer").value.trim();
-  if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+/* ---------------- 事件绑定 ---------------- */
 
-  // 候选人的回答先上屏, 服务端的评分结果回来后再补充到同一条气泡里。
-  bubble("candidate", "我", text);
-  state.ws.send(JSON.stringify({ type: "answer", text }));
-  $("answer").value = "";
-});
+function bind() {
+  $("navHome").onclick = () => { renderOverview(); showView("overview"); };
+  document.querySelectorAll("#navLinks .nav-link").forEach((btn) => {
+    btn.onclick = () => {
+      const view = btn.dataset.view;
+      if (view === "prep") { renderPrep(); showView("prep"); return; }
+      if (view === "report") { renderReport(state.report || { recommendation: "", dimensions: [], stats: {} }); showView("report"); loadLatestReport(); return; }
+      if (view === "overview") renderOverview();
+      showView(view);
+    };
+  });
+  $("navAbout").onclick = () => toast("AI 线上面试中台：编排引擎 + 多 Agent + 证据绑定评分");
 
-$("answer").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-    $("formAnswer").requestSubmit();
+  $("btnContinuePrep").onclick = () => {
+    if (prepCompletedSteps() >= 5) { startInterview(); return; }
+    state.prep.step = Math.max(0, prepCompletedSteps() - 1);
+    renderPrep();
+    showView("prep");
+  };
+  $("btnPreviewRoom").onclick = previewRoom;
+  $("prepBack").onclick = () => { renderOverview(); showView("overview"); };
+  $("formAnswer").addEventListener("submit", submitAnswer);
+  $("answer").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("formAnswer").requestSubmit();
+  });
+  $("btnAnother").onclick = () => {
+    state.session = null;
+    state.report = null;
+    state.prep.step = 0;
+    renderOverview();
+    showView("overview");
+  };
+
+  for (const [id, key] of [["pfName", "name"], ["pfCompany", "company"],
+    ["pfPosition", "position"], ["pfInterviewer", "interviewer"]]) {
+    $(id).oninput = () => { state.profile[key] = $(id).value; saveProfile(); renderOverview(); };
   }
-});
+}
 
-$("btnHistory").addEventListener("click", async () => {
-  const box = $("history");
-  box.hidden = false;
-  box.innerHTML = "<p class='sub'>加载中…</p>";
-  try {
-    const res = await fetch("/api/v1/sessions?limit=10");
-    const data = await res.json();
-    const items = (data.sessions || []);
-    box.innerHTML = items.length
-      ? items.map((s) =>
-          `<div class="hist-item">
-             <span>${escapeHTML(s.session_id)} · 第 ${s.round} 面 · ${escapeHTML(s.status)}</span>
-             <span>${escapeHTML(s.recommendation || "—")}</span>
-           </div>`).join("")
-      : "<p class='sub'>还没有面试记录。</p>";
-  } catch (err) {
-    box.innerHTML = `<p class="sub">加载失败: ${escapeHTML(err.message)}</p>`;
-  }
-});
-
-$("btnAgain").addEventListener("click", () => {
-  state.sessionId = null;
-  show("viewSetup");
-});
+loadProfile();
+bind();
+renderOverview();

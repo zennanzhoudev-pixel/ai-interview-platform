@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -449,9 +450,13 @@ func bindTurnID(v *scoring.Verdict, turnID string) {
 
 // Dimension 是报告里的一个能力项结论。
 type Dimension struct {
-	Competency string             `json:"competency"`
-	Level      string             `json:"level"`
-	LevelNum   int                `json:"level_num"`
+	Competency string `json:"competency"`
+	// Label 是能力项的中文展示名。库里存英文 key, 展示层用中文标签。
+	Label    string `json:"label"`
+	Level    string `json:"level"`
+	LevelNum int    `json:"level_num"`
+	// Score 是等级换算出的 0..100 分, 便于跨场次横向对比。
+	Score      int                `json:"score"`
 	Confidence float64            `json:"confidence"`
 	Turns      int                `json:"turns"`
 	Evidence   []scoring.Evidence `json:"evidence"`
@@ -478,17 +483,21 @@ type Stats struct {
 // Recommendation 只是"建议": 真实系统里录用决策始终由人做,
 // AI 的产出是可解释的证据与结构化结论。
 type Report struct {
-	SessionID      string      `json:"session_id"`
-	Round          int         `json:"round"`
-	DurationSec    int         `json:"duration_sec"`
-	BudgetSec      int         `json:"budget_sec"`
-	Recommendation string      `json:"recommendation"`
-	Confidence     float64     `json:"confidence"`
-	Dimensions     []Dimension `json:"dimensions"`
-	Gaps           []string    `json:"gaps"`
-	Flags          []string    `json:"flags"`
-	Stats          Stats       `json:"stats"`
-	Turns          []Turn      `json:"turns"`
+	SessionID      string `json:"session_id"`
+	Round          int    `json:"round"`
+	DurationSec    int    `json:"duration_sec"`
+	BudgetSec      int    `json:"budget_sec"`
+	Recommendation string `json:"recommendation"`
+	// Score 是 0..100 综合分。等级之外再给分数的理由很实际:
+	// 用人部门习惯按分数横向排序, 只给 L3/L4 他们反而会自己换算一次,
+	// 而且换算规则各人不同 —— 不如把规则显式写在代码里。
+	Score      int         `json:"score"`
+	Confidence float64     `json:"confidence"`
+	Dimensions []Dimension `json:"dimensions"`
+	Gaps       []string    `json:"gaps"`
+	Flags      []string    `json:"flags"`
+	Stats      Stats       `json:"stats"`
+	Turns      []Turn      `json:"turns"`
 }
 
 // Report 汇总当前所有问答, 生成结构化评估报告。
@@ -571,8 +580,10 @@ func (e *Engine) Report() Report {
 		}
 		rep.Dimensions = append(rep.Dimensions, Dimension{
 			Competency: c,
+			Label:      CompetencyLabel(c),
 			Level:      a.best.String(),
 			LevelNum:   a.best.Number(),
+			Score:      a.best.Score(),
 			Confidence: round2(conf),
 			Turns:      a.turns,
 			Evidence:   a.evidence,
@@ -584,6 +595,7 @@ func (e *Engine) Report() Report {
 
 	if len(rep.Dimensions) > 0 {
 		rep.Recommendation = recommend(levelSum/float64(len(rep.Dimensions)), rep.Dimensions)
+		rep.Score = compositeScore(rep.Dimensions)
 		rep.Confidence = round2(confSum / float64(len(rep.Dimensions)))
 	} else {
 		rep.Recommendation = "UNDETERMINED"
@@ -677,4 +689,23 @@ func unresolved(missing, matched map[string]bool) []string {
 
 func round2(v float64) float64 {
 	return float64(int(v*100+0.5)) / 100
+}
+
+// compositeScore 计算 0..100 综合分。
+//
+// 用等权平均而不是加权: 当前题库并没有为能力项定义权重, 凭空给
+// "分布式与中间件"设一个 30% 只会让分数看起来更精确, 并不更准确。
+// 等权平均至少是可解释的 —— 面试官能一眼算出这个分数是怎么来的。
+//
+// 它也不豁免任何维度: 某一项只要停在 L1, 那 40 分就会把综合分拉下来,
+// 这与 recommend 里"一项不合格即 NO_HIRE"的取向保持一致。
+func compositeScore(dims []Dimension) int {
+	if len(dims) == 0 {
+		return 0
+	}
+	sum := 0
+	for _, d := range dims {
+		sum += d.Score
+	}
+	return int(math.Round(float64(sum) / float64(len(dims))))
 }

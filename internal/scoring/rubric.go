@@ -44,6 +44,32 @@ var levelLabels = [...]string{
 	LevelExpert:     "专家",
 }
 
+// levelScores 把等级换算成 0..100 分。
+//
+// 换算规则是显式且单调的, 而且刻意不采用 0/20/40/60/80/100 的均分:
+// 面试评价不是考试, 把"未掌握"映射到 0 分会让报告失去区分度,
+// 也会让候选人觉得被"判了死刑"。用人方真正关心的是"能不能用",
+// 所以 L1 给 40、L4 给 88 —— 下限不至于羞辱人, 上限仍留出差距。
+//
+// 这套映射必须写死在代码里并接受评审。让模型决定"L3 到底是多少分"
+// 是评分系统里最不该出现的自由度。
+var levelScores = [...]int{
+	LevelUnknown:    0,
+	LevelNone:       40,
+	LevelAware:      58,
+	LevelProficient: 74,
+	LevelAdvanced:   88,
+	LevelExpert:     96,
+}
+
+// Score 返回该等级对应的 0..100 分。
+func (l Level) Score() int {
+	if l < 0 || int(l) >= len(levelScores) {
+		return 0
+	}
+	return levelScores[l]
+}
+
 // Label 返回等级的中文名(不含 L 编号), 用于注入评分 prompt。
 func (l Level) Label() string {
 	if l < 0 || int(l) >= len(levelLabels) {

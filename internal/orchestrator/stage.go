@@ -9,7 +9,10 @@
 // 阶段内部的局部决策, 出问题也炸不到整体结构。
 package orchestrator
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Stage 表示一场面试的宏观阶段。
 type Stage string
@@ -144,4 +147,36 @@ func (p Plan) Competencies() []string {
 		}
 	}
 	return out
+}
+
+// competencyLabels 是能力项的中文展示名。
+//
+// 库里存英文 key(便于聚合统计与跨语言扩展), 展示层用中文标签。
+// 直接把 project_depth 显示给候选人看是很糟糕的体验, 而把中文写进
+// 数据库 key 又会让统计脚本处处踩编码的坑 —— 两者的成本都真实存在,
+// 所以分开处理。
+var competencyLabels = map[string]string{
+	"project_depth":      "项目深度",
+	"tech_choice":        "技术选型",
+	"language_core":      "语言与运行时",
+	"distributed_system": "分布式与中间件",
+	"architecture":       "系统设计",
+}
+
+// CompetencyLabel 返回能力项的中文展示名, 未登记时回退为原 key。
+func CompetencyLabel(key string) string {
+	if label, ok := competencyLabels[key]; ok {
+		return label
+	}
+	return key
+}
+
+// CompetencyKeys 返回已登记的能力项 key, 便于测试与文档生成。
+func CompetencyKeys() []string {
+	keys := make([]string, 0, len(competencyLabels))
+	for k := range competencyLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

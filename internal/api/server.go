@@ -45,6 +45,10 @@ type Config struct {
 	// Scorers 每次开新会话时调用, 便于把模型消耗按会话归属。
 	Scorers func() Scorers
 	Logger  *log.Logger
+	// RateLimitPerSecond 与 RateLimitBurst 控制单机限流。
+	// 留 0 时使用默认值(20/s, 突发 60)。
+	RateLimitPerSecond float64
+	RateLimitBurst     float64
 }
 
 // Server 是面试的 HTTP / WebSocket 接入层。
@@ -53,6 +57,7 @@ type Server struct {
 	mux      *http.ServeMux
 	upgrader websocket.Upgrader
 	logger   *log.Logger
+	limiter  *limiter
 }
 
 // NewServer 构造接入层。
@@ -68,9 +73,10 @@ func NewServer(cfg Config) *Server {
 	}
 
 	s := &Server{
-		cfg:    cfg,
-		mux:    http.NewServeMux(),
-		logger: cfg.Logger,
+		cfg:     cfg,
+		mux:     http.NewServeMux(),
+		logger:  cfg.Logger,
+		limiter: newLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -97,8 +103,23 @@ func DefaultScorers() Scorers {
 	}
 }
 
-// Handler 返回 HTTP 处理器。
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler 返回 HTTP 处理器(带单机限流)。
+func (s *Server) Handler() http.Handler { return s.withRateLimit(s.mux) }
+
+// withRateLimit 按客户端 IP 限流。
+//
+// 限流键用 IP 而不是租户: 这一层的目的是保护进程自身不被任何单一来源
+// 打爆, 与租户配额(业务级、按合同约定)是两个不同的问题, 不该混在一起。
+func (s *Server) withRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.limiter.allow(clientIP(r)) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, "请求过于频繁, 请稍后重试")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
@@ -106,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleListSessions)
 	s.mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleGetSession)
 	s.mux.HandleFunc("GET /api/v1/sessions/{id}/report", s.handleGetReport)
+	s.mux.HandleFunc("GET /api/v1/sessions/{id}/consents", s.handleGetConsents)
 	s.mux.HandleFunc("GET /ws/interview/{id}", s.handleInterview)
 	// 静态资源挂在根路径。Go 1.22 的 ServeMux 优先匹配更具体的模式,
 	// 所以 /api 与 /ws 不会被这里吞掉。
@@ -125,16 +147,24 @@ type createSessionRequest struct {
 	Minutes          int    `json:"minutes"`
 	CandidateID      string `json:"candidate_id"`
 	TenantID         string `json:"tenant_id"`
+	Position         string `json:"position"`
+	Company          string `json:"company"`
+	CandidateName    string `json:"candidate_name"`
+	InterviewerName  string `json:"interviewer_name"`
 	ConsentRecording bool   `json:"consent_recording"`
 }
 
 type sessionResponse struct {
-	SessionID string `json:"session_id"`
-	Round     int    `json:"round"`
-	Minutes   int    `json:"minutes"`
-	Stage     string `json:"stage"`
-	Status    string `json:"status"`
-	WSURL     string `json:"ws_url"`
+	SessionID       string `json:"session_id"`
+	Round           int    `json:"round"`
+	Minutes         int    `json:"minutes"`
+	Position        string `json:"position"`
+	Company         string `json:"company"`
+	CandidateName   string `json:"candidate_name"`
+	InterviewerName string `json:"interviewer_name"`
+	Stage           string `json:"stage"`
+	Status          string `json:"status"`
+	WSURL           string `json:"ws_url"`
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -169,12 +199,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess := store.Session{
-		ID:       newSessionID(),
-		TenantID: tenant,
-		Round:    req.Round,
-		Minutes:  req.Minutes,
-		Stage:    string(orchestrator.StageInit),
-		Status:   store.StatusRunning,
+		ID:              newSessionID(),
+		TenantID:        tenant,
+		Position:        defaultString(req.Position, "后端工程师"),
+		Company:         defaultString(req.Company, "示例科技"),
+		CandidateName:   defaultString(req.CandidateName, "候选人"),
+		InterviewerName: defaultString(req.InterviewerName, "林澈"),
+		Round:           req.Round,
+		Minutes:         req.Minutes,
+		Stage:           string(orchestrator.StageInit),
+		Status:          store.StatusRunning,
 	}
 	if err := s.cfg.Store.CreateSession(r.Context(), sess); err != nil {
 		s.logger.Printf("创建会话失败: %v", err)
@@ -200,12 +234,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, sessionResponse{
-		SessionID: sess.ID,
-		Round:     sess.Round,
-		Minutes:   sess.Minutes,
-		Stage:     sess.Stage,
-		Status:    string(sess.Status),
-		WSURL:     "/ws/interview/" + sess.ID,
+		SessionID:       sess.ID,
+		Round:           sess.Round,
+		Minutes:         sess.Minutes,
+		Position:        sess.Position,
+		Company:         sess.Company,
+		CandidateName:   sess.CandidateName,
+		InterviewerName: sess.InterviewerName,
+		Stage:           sess.Stage,
+		Status:          string(sess.Status),
+		WSURL:           "/ws/interview/" + sess.ID,
 	})
 }
 
@@ -258,8 +296,29 @@ func (s *Server) handleGetReport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(rep.Payload)
 }
 
+// handleGetConsents 返回候选人数据授权留痕。
+//
+// 把这个接口开放出来不是为了"功能齐全", 而是因为授权本来就该可查:
+// 候选人有权知道自己同意了什么、什么时候同意的。把它藏起来,
+// 等于让合规声明变成一句无法验证的话。
+func (s *Server) handleGetConsents(w http.ResponseWriter, r *http.Request) {
+	consents, err := s.cfg.Store.ListConsents(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取授权记录失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"consents": consents})
+}
+
 func newSessionID() string {
 	return fmt.Sprintf("s_%d_%04d", time.Now().Unix(), rand.Intn(10000))
+}
+
+func defaultString(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
 }
 
 func clientIP(r *http.Request) string {
@@ -349,14 +408,18 @@ func (s *Server) handleInterview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = conn.WriteJSON(map[string]any{
-		"type":        "state",
-		"session_id":  sess.ID,
-		"round":       sess.Round,
-		"minutes":     sess.Minutes,
-		"stage":       string(eng.Stage()),
-		"resumed":     len(turns) > 0,
-		"turn_count":  len(turns),
-		"elapsed_sec": elapsedSeconds(turns),
+		"type":             "state",
+		"session_id":       sess.ID,
+		"round":            sess.Round,
+		"minutes":          sess.Minutes,
+		"position":         sess.Position,
+		"company":          sess.Company,
+		"candidate_name":   sess.CandidateName,
+		"interviewer_name": sess.InterviewerName,
+		"stage":            string(eng.Stage()),
+		"resumed":          len(turns) > 0,
+		"turn_count":       len(turns),
+		"elapsed_sec":      elapsedSeconds(turns),
 	})
 
 	// 记录里的问答已经把面试推到终点: 不重新问, 直接出报告。

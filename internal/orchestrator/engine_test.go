@@ -315,3 +315,48 @@ func (c *countingScorer) Score(a scoring.Answer) scoring.Result {
 	c.count++
 	return c.inner.Score(a)
 }
+
+// 报告要能直接给面试官看: 除了等级, 还要有 0..100 分和中文能力项名。
+func TestReportExposesScoreAndChineseLabels(t *testing.T) {
+	engine := runSession(t, 45*time.Minute, func(string) (string, time.Duration) {
+		return "用了 ZSet 和 score, 内存也估算过。", 2 * time.Minute
+	})
+
+	rep := engine.Report()
+	if rep.Score <= 0 || rep.Score > 100 {
+		t.Fatalf("综合分应在 1..100 之间, 实际 %d", rep.Score)
+	}
+	if len(rep.Dimensions) == 0 {
+		t.Fatal("应至少产生一个能力维度")
+	}
+
+	sum := 0
+	for _, d := range rep.Dimensions {
+		if d.Label == "" || d.Label == d.Competency {
+			t.Fatalf("能力项 %q 缺少中文展示名", d.Competency)
+		}
+		want := scoring.LevelFromNumber(d.LevelNum).Score()
+		if d.Score != want {
+			t.Fatalf("维度 %s 分数与等级不匹配: 等级 %d -> %d 分, 实际 %d 分",
+				d.Competency, d.LevelNum, want, d.Score)
+		}
+		sum += d.Score
+	}
+
+	avg := (sum + len(rep.Dimensions)/2) / len(rep.Dimensions)
+	if diff := rep.Score - avg; diff > 1 || diff < -1 {
+		t.Fatalf("综合分应为各维度等权平均: 期望约 %d, 实际 %d", avg, rep.Score)
+	}
+}
+
+func TestCompetencyLabelFallsBackToKey(t *testing.T) {
+	if got := CompetencyLabel("architecture"); got != "系统设计" {
+		t.Fatalf("已登记的能力项应返回中文名, 实际 %q", got)
+	}
+	if got := CompetencyLabel("unknown_one"); got != "unknown_one" {
+		t.Fatalf("未登记的能力项应回退为原 key, 实际 %q", got)
+	}
+	if len(CompetencyKeys()) == 0 {
+		t.Fatal("应至少登记一个能力项")
+	}
+}
