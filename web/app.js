@@ -727,6 +727,64 @@ function previewRoom() {
 
 /* ---------------- 报告 ---------------- */
 
+// 报告里用到的展示映射。能力项在库里存英文 key, 展示用中文标签。
+const COMPETENCY_LABELS = {
+  project_depth: "项目深度",
+  tech_choice: "技术选型",
+  language_core: "语言与运行时",
+  distributed_system: "分布式与中间件",
+  architecture: "系统设计",
+};
+
+function compLabel(key) {
+  return COMPETENCY_LABELS[key] || key || "—";
+}
+
+function stageLabel(key) {
+  const found = STAGES.find(([k]) => k === key);
+  return found ? found[1] : (key || "—");
+}
+
+function fmtDur(ms) {
+  const sec = Math.round((ms || 0) / 1000);
+  if (sec < 60) return sec + " 秒";
+  return `${Math.floor(sec / 60)} 分 ${String(sec % 60).padStart(2, "0")} 秒`;
+}
+
+function recLabel(rec) {
+  return {
+    STRONG_HIRE: "强烈推荐",
+    HIRE: "推荐通过",
+    PASS_WITH_CONCERN: "通过但有顾虑",
+    NO_HIRE: "不建议通过",
+    UNDETERMINED: "证据不足",
+  }[rec] || rec || "—";
+}
+
+// turnHTML 渲染一轮问答, 用于报告页的逐轮回放。
+function turnHTML(t) {
+  const final = (t.verdict && t.verdict.final) || {};
+  const chip = t.scored
+    ? `<span class="chip">${escapeHTML(final.level || "已评分")}</span>` +
+      `<span class="chip">置信度 ${Number(final.confidence || 0).toFixed(2)}</span>`
+    : `<span class="chip muted-chip">本环节不计分</span>`;
+  const evidence = (final.evidence || [])
+    .map((e) => `<li><span class="quote">${escapeHTML(e.quote)}</span></li>`)
+    .join("");
+  return `
+    <li class="tl-item">
+      <div class="tl-head">
+        <span class="tl-index">${t.index}</span>
+        <span class="tl-stage">${escapeHTML(stageLabel(t.stage))}${t.is_probe ? " · 追问" : ""}</span>
+        <span class="tl-dur">${fmtDur(t.duration_ms)}</span>
+      </div>
+      <p class="tl-q">${escapeHTML(t.question)}</p>
+      <p class="tl-a">${escapeHTML(t.answer)}</p>
+      <div class="tl-meta">${chip}</div>
+      ${evidence ? `<ul class="evidence-list">${evidence}</ul>` : ""}
+    </li>`;
+}
+
 function renderReport(rep) {
   const p = state.profile;
   $("repSession").textContent = state.session ? state.session.session_id : "本地报告";
@@ -763,26 +821,108 @@ function renderReport(rep) {
   }).join("");
 
   const s = rep.stats || {};
-  const flags = (rep.flags || []).map((f) => `<div class="flag">${escapeHTML(f)}</div>`).join("");
-  const gaps = (rep.gaps || []).length
-    ? `<div class="flag">未覆盖考察项：${escapeHTML(rep.gaps.join(" / "))}</div>` : "";
+  const turns = rep.turns || [];
+  const gaps = rep.gaps || [];
+  const flags = rep.flags || [];
+
+  // 结论摘要: 用真实数据拼一句话, 而不是写死的模板。
+  const strong = dims.filter((d) => d.level_num >= 4);
+  const weak = dims.filter((d) => d.level_num <= 2);
+  const planned = dims.length + gaps.length;
+  const coverage = planned ? Math.round((dims.length / planned) * 100) : 0;
+  const evidenceCount = dims.reduce((n, d) => n + (d.evidence || []).length, 0);
+  const summary = [
+    `${dims.length} 个考察项中 ${strong.length} 项达到「精通」及以上`,
+    weak.length ? `偏弱的是 ${weak.map((d) => d.label || compLabel(d.competency)).join("、")}` : "没有明显短板",
+    gaps.length ? `${gaps.map(compLabel).join("、")} 未覆盖` : "考察项全部覆盖",
+  ].join("；");
+
+  // 各阶段实际耗时, 来自每一轮问答的服务端计时。
+  const stageTotals = new Map();
+  for (const t of turns) {
+    const key = t.stage || "OTHER";
+    stageTotals.set(key, (stageTotals.get(key) || 0) + (t.duration_ms || 0));
+  }
+  const stageRows = Array.from(stageTotals.entries()).sort((a, b) => b[1] - a[1]);
+  const maxStageMs = Math.max(1, ...stageRows.map((r) => r[1]));
+
+  const flagsHTML = flags.map((f) => `<div class="flag">${escapeHTML(f)}</div>`).join("");
+  const gapsHTML = gaps.length
+    ? `<div class="flag">未覆盖考察项：${escapeHTML(gaps.map(compLabel).join(" / "))}</div>` : "";
 
   $("repDetail").innerHTML = `
-    ${flags}${gaps}
-    ${detail || "<p class='muted small'>本场没有产生可评分的考察项。</p>"}
-    <div class="card" style="margin-top:22px">
-      <h3 style="font-size:15px;margin-bottom:6px">过程指标</h3>
+    <div class="card">
+      <div class="summary">
+        <div>
+          <div class="badge ${escapeHTML(rep.recommendation || "")}">${escapeHTML(recLabel(rep.recommendation))}</div>
+          <p class="muted small" style="margin-top:6px">AI 建议结论 · 置信度 ${Number(rep.confidence || 0).toFixed(2)}</p>
+        </div>
+        <p class="summary-text">${escapeHTML(summary)}。</p>
+      </div>
       <div class="stats-grid">
+        <div>考察项覆盖<b>${coverage}%</b></div>
+        <div>证据条数<b>${evidenceCount}</b></div>
         <div>问答轮数<b>${s.turns || 0}</b></div>
+        <div>用时 / 预算<b>${rep.duration_sec || 0}s / ${rep.budget_sec || 0}s</b></div>
+      </div>
+      ${flagsHTML}${gapsHTML}
+    </div>
+
+    <div class="card">
+      <h2>能力维度</h2>
+      <p class="muted small">每个等级都绑定候选人原话，可逐条回溯。</p>
+      ${detail || "<p class='muted small'>本场没有产生可评分的考察项。</p>"}
+    </div>
+
+    <div class="card">
+      <h2>面试节奏</h2>
+      <p class="muted small">各阶段实际耗时，来自每一轮问答的服务端计时。</p>
+      <div class="stage-timing">
+        ${stageRows.map(([stage, ms]) => `
+          <div class="timing-row">
+            <span class="name">${escapeHTML(stageLabel(stage))}</span>
+            <span class="bar"><i style="width:${Math.round((ms / maxStageMs) * 100)}%"></i></span>
+            <span class="val">${fmtDur(ms)}</span>
+          </div>`).join("") || "<p class='muted small'>没有可统计的轮次。</p>"}
+      </div>
+      <div class="stats-grid" style="margin-top:18px">
         <div>计分轮数<b>${s.scored_turns || 0}</b></div>
         <div>追问轮数<b>${s.probes || 0}</b></div>
-        <div>最大追问深度<b>${s.max_probe_depth || 0}</b></div>
-        <div>双模型分歧<b>${s.disagreements || 0}</b></div>
-        <div>三方仲裁<b>${s.arbitrations || 0}</b></div>
-        <div>转人工复核<b>${s.human_review_items || 0}</b></div>
-        <div>降级评分<b>${s.degraded_scores || 0}</b></div>
-        <div>耗时 / 预算<b>${rep.duration_sec || 0}s / ${rep.budget_sec || 0}s</b></div>
+        <div>最大追问深度<b>${s.max_probe_depth || 0} / 2</b></div>
+        <div>平均置信度<b>${Number(s.avg_confidence || 0).toFixed(2)}</b></div>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>评分口径与来源</h2>
+      <p class="muted small">
+        等级到分数的换算规则写死在代码里，不由模型决定；综合分是各考察项的等权平均。
+        拿不出原话证据的判断不会进入这个表。
+      </p>
+      <table class="doc-table">
+        <thead><tr><th>等级</th><th>含义</th><th>分数</th></tr></thead>
+        <tbody>
+          <tr><td>L1 未掌握</td><td>无法描述基本概念</td><td>40</td></tr>
+          <tr><td>L2 了解</td><td>知道概念，讲不出落地方式</td><td>58</td></tr>
+          <tr><td>L3 熟练</td><td>能设计并说明权衡</td><td>74</td></tr>
+          <tr><td>L4 精通</td><td>能预判瓶颈，给出容量估算或降级方案</td><td>88</td></tr>
+          <tr><td>L5 专家</td><td>有跨系统权衡经验，能提出额外方案</td><td>96</td></tr>
+        </tbody>
+      </table>
+      <div class="stats-grid" style="margin-top:18px">
+        <div>双模型分歧<b>${s.disagreements || 0} 条</b></div>
+        <div>三方仲裁<b>${s.arbitrations || 0} 条</b></div>
+        <div>转人工复核<b>${s.human_review_items || 0} 条</b></div>
+        <div>降级评分<b>${s.degraded_scores || 0} 条</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>逐轮问答回放</h2>
+      <p class="muted small">面试官复核用：这一轮问了什么、候选人怎么答的、结论如何。</p>
+      <ol class="timeline">
+        ${turns.map(turnHTML).join("") || "<p class='muted small'>没有问答记录。</p>"}
+      </ol>
     </div>`;
 }
 
@@ -929,6 +1069,7 @@ function bind() {
     renderOverview();
     showView("overview");
   };
+  $("btnPrint").onclick = () => window.print();
 
   for (const [id, key] of [["pfName", "name"], ["pfCompany", "company"],
     ["pfPosition", "position"], ["pfInterviewer", "interviewer"]]) {

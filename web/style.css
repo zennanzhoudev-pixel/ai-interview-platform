@@ -378,6 +378,41 @@ textarea { resize: vertical; }
 }
 .consent-list div:first-child { border-top: 0; }
 
+/* ---------- 报告: 结论摘要 / 节奏 / 逐轮回放 ---------- */
+.summary { display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 22px; }
+.summary-text { flex: 1; min-width: 240px; color: var(--ink-2); font-size: 14.5px; line-height: 1.8; }
+
+.stage-timing { display: grid; gap: 12px; margin-top: 14px; }
+.timing-row { display: grid; grid-template-columns: 118px 1fr 92px; align-items: center; gap: 14px; }
+.timing-row .name { font-size: 13.5px; }
+.timing-row .val { text-align: right; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.timeline { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 18px; }
+.tl-item { border-left: 2px solid var(--line); padding-left: 16px; }
+.tl-head { display: flex; align-items: center; gap: 10px; }
+.tl-index {
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--line-2); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.tl-stage { flex: 1; font-size: 13px; color: var(--ink-2); }
+.tl-dur { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tl-q { margin-top: 9px; font-size: 14.5px; font-weight: 550; }
+.tl-a { margin-top: 5px; font-size: 14px; color: var(--ink-2); }
+.tl-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.tl-item .evidence-list { margin-top: 8px; }
+
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.chip.muted-chip { background: var(--line-2); color: var(--ink-2); }
+
+/* 打印/导出 PDF: 只留报告正文 */
+@media print {
+  .nav, .actions, .toast, .modal, .view-head .pill { display: none !important; }
+  body { background: #fff; }
+  main { max-width: none; padding: 0; }
+  .card { break-inside: avoid; border-color: #dcdcdc; }
+  .display, .score-num { color: #000; }
+}
+
 .toast {
   position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
   background: var(--dark); color: #fff; padding: 12px 18px; border-radius: 10px;

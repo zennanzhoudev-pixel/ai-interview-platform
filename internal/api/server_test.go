@@ -433,3 +433,48 @@ func TestParseResumeEndpoint(t *testing.T) {
 		t.Fatalf("应抽取到带原文偏移的 ZSet: %+v", out.Entities)
 	}
 }
+
+// 会话列表必须返回 snake_case 字段。
+// 这条断言来自一个真实事故: store.Session 原先没有 JSON tag, 于是接口返回的是
+// Go 字段名(ID/Status/Position), 而前端读的是 session_id —— 两边都没报错,
+// 表现是"最近报告"整块空白, 极难定位。
+func TestSessionListUsesSnakeCaseJSON(t *testing.T) {
+	ts, _ := newTestServer(t)
+	if _, body := createSession(t, ts.URL, map[string]any{
+		"round": 1, "minutes": 30, "consent_recording": true,
+		"position": "高级后端工程师", "company": "示例科技",
+		"resume_text": "技能: Go\n项目经历\n- IM 平台 2023.06 - 2024.03",
+	}); body["session_id"] == nil {
+		t.Fatalf("创建会话应返回 session_id: %v", body)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/v1/sessions?limit=1")
+	if err != nil {
+		t.Fatalf("查询列表失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("解码失败: %v", err)
+	}
+	if len(out.Sessions) == 0 {
+		t.Fatal("应返回至少一条会话")
+	}
+
+	sess := out.Sessions[0]
+	if sess["session_id"] == nil {
+		t.Fatalf("字段名应为 snake_case 的 session_id: %v", sess)
+	}
+	if sess["position"] != "高级后端工程师" || sess["company"] != "示例科技" {
+		t.Fatalf("展示元信息字段名或取值错误: %v", sess)
+	}
+	if _, exposed := sess["ResumeJSON"]; exposed {
+		t.Fatal("内部存储字段(简历实体)不应暴露在列表接口里")
+	}
+	if _, exposed := sess["ID"]; exposed {
+		t.Fatal("不应出现 Go 字段名 ID")
+	}
+}
