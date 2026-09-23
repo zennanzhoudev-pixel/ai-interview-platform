@@ -1,0 +1,1465 @@
+{
+  "session_id": "s_1790140569",
+  "round": 1,
+  "duration_sec": 1415,
+  "budget_sec": 2700,
+  "recommendation": "HIRE",
+  "confidence": 0.82,
+  "dimensions": [
+    {
+      "competency": "architecture",
+      "level": "L2 了解",
+      "level_num": 2,
+      "confidence": 0.56,
+      "turns": 3,
+      "evidence": [
+        {
+          "turn_id": "t_011",
+          "question_id": "q_arch_limit",
+          "kind": "support",
+          "matched": "热点 / 降级",
+          "quote": "我会在入口做一层限流, 对热点接口单独配置阈值, 同时准备降级开关, 一旦限流组件本身故障就整体放行, 保证不拖垮主站",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_012",
+          "question_id": "q_arch_limit.p1",
+          "kind": "against",
+          "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_013",
+          "question_id": "q_arch_limit.p1.p2",
+          "kind": "against",
+          "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+          "at_ms": 0
+        }
+      ],
+      "concerns": [
+        "令牌桶",
+        "容量估算",
+        "滑动窗口"
+      ]
+    },
+    {
+      "competency": "distributed_system",
+      "level": "L4 精通",
+      "level_num": 4,
+      "confidence": 0.95,
+      "turns": 1,
+      "evidence": [
+        {
+          "turn_id": "t_010",
+          "question_id": "q_dist_idem",
+          "kind": "support",
+          "matched": "去重 / 唯一键 / 幂等",
+          "quote": "消费端幂等我会用唯一键做去重, 把业务 ID 加消息 ID 拼成唯一索引, 写库时靠唯一约束兜底",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_010",
+          "question_id": "q_dist_idem",
+          "kind": "support",
+          "matched": "最终一致 / 状态机",
+          "quote": "跨服务场景下单靠本地去重不够, 通常引入一张状态机表记录消费状态, 让下游操作满足最终一致, 失败的再靠定时补偿",
+          "at_ms": 0
+        }
+      ]
+    },
+    {
+      "competency": "language_core",
+      "level": "L4 精通",
+      "level_num": 4,
+      "confidence": 0.7,
+      "turns": 4,
+      "evidence": [
+        {
+          "turn_id": "t_006",
+          "question_id": "q_go_gmp",
+          "kind": "support",
+          "matched": "GMP",
+          "quote": "GMP 里 G 是 goroutine, M 是系统线程, P 是处理器上下文",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_006",
+          "question_id": "q_go_gmp",
+          "kind": "support",
+          "matched": "本地队列",
+          "quote": "P 带着一个本地队列, 减少了全局锁竞争",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_006",
+          "question_id": "q_go_gmp",
+          "kind": "support",
+          "matched": "抢占",
+          "quote": "14 之后还加了基于信号的抢占",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_006",
+          "question_id": "q_go_gmp",
+          "kind": "support",
+          "matched": "work stealing",
+          "quote": "某个 P 的队列空了会去别的 P 那里 work stealing",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_006",
+          "question_id": "q_go_gmp",
+          "kind": "support",
+          "matched": "用户态",
+          "quote": "相比线程模型, 切换发生在用户态, 不用陷入内核",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_007",
+          "question_id": "q_go_gc",
+          "kind": "support",
+          "matched": "STW / 三色 / 写屏障 / 混合写屏障",
+          "quote": "Go 用的是三色标记加混合写屏障, 标记阶段和用户程序并发执行, 所以标记过程本身不需要 STW",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_008",
+          "question_id": "q_go_gc.p1",
+          "kind": "against",
+          "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_009",
+          "question_id": "q_go_gc.p1.p2",
+          "kind": "against",
+          "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+          "at_ms": 0
+        }
+      ],
+      "concerns": [
+        "并发标记"
+      ]
+    },
+    {
+      "competency": "project_depth",
+      "level": "L4 精通",
+      "level_num": 4,
+      "confidence": 0.92,
+      "turns": 3,
+      "evidence": [
+        {
+          "turn_id": "t_002",
+          "question_id": "q_resume_zset",
+          "kind": "support",
+          "matched": "70% / ZSet / score / 排序",
+          "quote": "我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重, 排名查询直接走有序结构, 不用再全量排序, 查询 RT 降了 70% 左右",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_003",
+          "question_id": "q_resume_zset.p1",
+          "kind": "support",
+          "matched": "内存",
+          "quote": "内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理和按用户分片, 避免出现大 key",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_005",
+          "question_id": "q_resume_flow",
+          "kind": "support",
+          "matched": "状态机 / 重试",
+          "quote": "这条流水线我们做成了状态机, 每个阶段有独立状态, 失败只重试当前阶段, 不用整条重跑",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_005",
+          "question_id": "q_resume_flow",
+          "kind": "support",
+          "matched": "幂等",
+          "quote": "写库的时候用 shot_id 做幂等键, 保证重试不会重复扣费",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_005",
+          "question_id": "q_resume_flow",
+          "kind": "support",
+          "matched": "断点",
+          "quote": "每条任务都落了断点, 可以从失败阶段继续",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_005",
+          "question_id": "q_resume_flow",
+          "kind": "support",
+          "matched": "补偿",
+          "quote": "极端情况下靠定时补偿任务兜底",
+          "at_ms": 0
+        }
+      ]
+    },
+    {
+      "competency": "tech_choice",
+      "level": "L4 精通",
+      "level_num": 4,
+      "confidence": 0.95,
+      "turns": 1,
+      "evidence": [
+        {
+          "turn_id": "t_004",
+          "question_id": "q_resume_wasm",
+          "kind": "support",
+          "matched": "WASM / 冷启动 / 复用 / 编译",
+          "quote": "我们选了 Extism 的 WASM 插件运行时, 主要是它能把编译产物复用起来, 避免每次首次对话都重新编译, 冷启动从 5 到 8 秒压到 1 秒内",
+          "at_ms": 0
+        },
+        {
+          "turn_id": "t_004",
+          "question_id": "q_resume_wasm",
+          "kind": "support",
+          "matched": "隔离",
+          "quote": "另外 WASM 本身有沙箱隔离能力, 比直接跑原生插件安全",
+          "at_ms": 0
+        }
+      ]
+    }
+  ],
+  "gaps": null,
+  "flags": null,
+  "stats": {
+    "turns": 15,
+    "scored_turns": 12,
+    "probes": 5,
+    "disagreements": 0,
+    "arbitrations": 0,
+    "human_review_items": 0,
+    "max_probe_depth": 2,
+    "avg_confidence": 0.82
+  },
+  "turns": [
+    {
+      "index": 1,
+      "stage": "GREETING",
+      "question_id": "q_greet",
+      "question": "你好, 我是本轮的 AI 面试官。开始前请用一分钟做个简单的自我介绍, 重点讲一下你最有代表性的项目。",
+      "answer": "面试官好, 我是主攻 Go 后端方向的候选人。最近一年在做 IM 对话平台, 主要负责 Redis 存储改造和分布式任务调度两块, 另外自己做过一个 AI-Ops 运维 Agent 平台。",
+      "duration_ms": 70000000000,
+      "is_probe": false,
+      "scored": false
+    },
+    {
+      "index": 2,
+      "stage": "RESUME_DEEP_DIVE",
+      "question_id": "q_resume_zset",
+      "competency": "project_depth",
+      "question": "简历里提到你用 ZSet 做索引把查询 RT 降低了 70%, 具体是怎么做的?",
+      "answer": "我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重, 排名查询直接走有序结构, 不用再全量排序, 查询 RT 降了 70% 左右。",
+      "duration_ms": 150000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "ZSet",
+            "score",
+            "排序",
+            "70%"
+          ],
+          "missing": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_002",
+              "question_id": "q_resume_zset",
+              "kind": "support",
+              "matched": "70% / ZSet / score / 排序",
+              "quote": "我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重, 排名查询直接走有序结构, 不用再全量排序, 查询 RT 降了 70% 左右",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "命中 4/5 个判定要点: L4 精通"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "ZSet",
+            "score",
+            "排序",
+            "70%"
+          ],
+          "missing": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_002",
+              "question_id": "q_resume_zset",
+              "kind": "support",
+              "matched": "70% / ZSet / score / 排序",
+              "quote": "我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重, 排名查询直接走有序结构, 不用再全量排序, 查询 RT 降了 70% 左右",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "命中 4/5 个判定要点: L4 精通"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "70%",
+            "ZSet",
+            "score",
+            "排序"
+          ],
+          "missing": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_002",
+              "question_id": "q_resume_zset",
+              "kind": "support",
+              "matched": "70% / ZSet / score / 排序",
+              "quote": "我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重, 排名查询直接走有序结构, 不用再全量排序, 查询 RT 降了 70% 左右",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 3,
+      "stage": "RESUME_DEEP_DIVE",
+      "question_id": "q_resume_zset.p1",
+      "competency": "project_depth",
+      "question": "你刚才没有提到 内存, 能展开讲讲吗?",
+      "answer": "内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理和按用户分片, 避免出现大 key。",
+      "duration_ms": 75000000000,
+      "is_probe": true,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_003",
+              "question_id": "q_resume_zset.p1",
+              "kind": "support",
+              "matched": "内存",
+              "quote": "内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理和按用户分片, 避免出现大 key",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 1/1 个判定要点: L5 专家"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_003",
+              "question_id": "q_resume_zset.p1",
+              "kind": "support",
+              "matched": "内存",
+              "quote": "内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理和按用户分片, 避免出现大 key",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 1/1 个判定要点: L5 专家"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "内存"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_003",
+              "question_id": "q_resume_zset.p1",
+              "kind": "support",
+              "matched": "内存",
+              "quote": "内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理和按用户分片, 避免出现大 key",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 4,
+      "stage": "RESUME_DEEP_DIVE",
+      "question_id": "q_resume_wasm",
+      "competency": "tech_choice",
+      "question": "你提到用 WASM 插件运行时做编译产物复用, 把首响从 5-8 秒降到 1 秒。为什么选这个方案?",
+      "answer": "我们选了 Extism 的 WASM 插件运行时, 主要是它能把编译产物复用起来, 避免每次首次对话都重新编译, 冷启动从 5 到 8 秒压到 1 秒内。另外 WASM 本身有沙箱隔离能力, 比直接跑原生插件安全。",
+      "duration_ms": 160000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "WASM",
+            "编译",
+            "复用",
+            "冷启动",
+            "隔离"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "WASM / 冷启动 / 复用 / 编译",
+              "quote": "我们选了 Extism 的 WASM 插件运行时, 主要是它能把编译产物复用起来, 避免每次首次对话都重新编译, 冷启动从 5 到 8 秒压到 1 秒内",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "隔离",
+              "quote": "另外 WASM 本身有沙箱隔离能力, 比直接跑原生插件安全",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "WASM",
+            "编译",
+            "复用",
+            "冷启动",
+            "隔离"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "WASM / 冷启动 / 复用 / 编译",
+              "quote": "我们选了 Extism 的 WASM 插件运行时, 主要是它能把编译产物复用起来, 避免每次首次对话都重新编译, 冷启动从 5 到 8 秒压到 1 秒内",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "隔离",
+              "quote": "另外 WASM 本身有沙箱隔离能力, 比直接跑原生插件安全",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "WASM",
+            "冷启动",
+            "复用",
+            "编译",
+            "隔离"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "WASM / 冷启动 / 复用 / 编译",
+              "quote": "我们选了 Extism 的 WASM 插件运行时, 主要是它能把编译产物复用起来, 避免每次首次对话都重新编译, 冷启动从 5 到 8 秒压到 1 秒内",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_004",
+              "question_id": "q_resume_wasm",
+              "kind": "support",
+              "matched": "隔离",
+              "quote": "另外 WASM 本身有沙箱隔离能力, 比直接跑原生插件安全",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 5,
+      "stage": "RESUME_DEEP_DIVE",
+      "question_id": "q_resume_flow",
+      "competency": "project_depth",
+      "question": "AI 视频生成那条四阶段流水线, 如果第二阶段失败了怎么处理? 怎么保证不会重复扣费?",
+      "answer": "这条流水线我们做成了状态机, 每个阶段有独立状态, 失败只重试当前阶段, 不用整条重跑。写库的时候用 shot_id 做幂等键, 保证重试不会重复扣费; 每条任务都落了断点, 可以从失败阶段继续。极端情况下靠定时补偿任务兜底。",
+      "duration_ms": 150000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "状态机",
+            "幂等",
+            "重试",
+            "断点",
+            "补偿"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "状态机 / 重试",
+              "quote": "这条流水线我们做成了状态机, 每个阶段有独立状态, 失败只重试当前阶段, 不用整条重跑",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "幂等",
+              "quote": "写库的时候用 shot_id 做幂等键, 保证重试不会重复扣费",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "断点",
+              "quote": "每条任务都落了断点, 可以从失败阶段继续",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "补偿",
+              "quote": "极端情况下靠定时补偿任务兜底",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "状态机",
+            "幂等",
+            "重试",
+            "断点",
+            "补偿"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "状态机 / 重试",
+              "quote": "这条流水线我们做成了状态机, 每个阶段有独立状态, 失败只重试当前阶段, 不用整条重跑",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "幂等",
+              "quote": "写库的时候用 shot_id 做幂等键, 保证重试不会重复扣费",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "断点",
+              "quote": "每条任务都落了断点, 可以从失败阶段继续",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "补偿",
+              "quote": "极端情况下靠定时补偿任务兜底",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "幂等",
+            "断点",
+            "状态机",
+            "补偿",
+            "重试"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "状态机 / 重试",
+              "quote": "这条流水线我们做成了状态机, 每个阶段有独立状态, 失败只重试当前阶段, 不用整条重跑",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "幂等",
+              "quote": "写库的时候用 shot_id 做幂等键, 保证重试不会重复扣费",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "断点",
+              "quote": "每条任务都落了断点, 可以从失败阶段继续",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_005",
+              "question_id": "q_resume_flow",
+              "kind": "support",
+              "matched": "补偿",
+              "quote": "极端情况下靠定时补偿任务兜底",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 6,
+      "stage": "TECH_FUNDAMENTAL",
+      "question_id": "q_go_gmp",
+      "competency": "language_core",
+      "question": "讲讲 Go 的 GMP 调度模型, 以及它相对线程模型在高并发长连接场景下省在哪。",
+      "answer": "GMP 里 G 是 goroutine, M 是系统线程, P 是处理器上下文。P 带着一个本地队列, 减少了全局锁竞争; 某个 P 的队列空了会去别的 P 那里 work stealing; Go 1.14 之后还加了基于信号的抢占。相比线程模型, 切换发生在用户态, 不用陷入内核。",
+      "duration_ms": 180000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "GMP",
+            "本地队列",
+            "抢占",
+            "work stealing",
+            "用户态"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "GMP",
+              "quote": "GMP 里 G 是 goroutine, M 是系统线程, P 是处理器上下文",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "本地队列",
+              "quote": "P 带着一个本地队列, 减少了全局锁竞争",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "抢占",
+              "quote": "14 之后还加了基于信号的抢占",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "work stealing",
+              "quote": "某个 P 的队列空了会去别的 P 那里 work stealing",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "用户态",
+              "quote": "相比线程模型, 切换发生在用户态, 不用陷入内核",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "GMP",
+            "本地队列",
+            "抢占",
+            "work stealing",
+            "用户态"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "GMP",
+              "quote": "GMP 里 G 是 goroutine, M 是系统线程, P 是处理器上下文",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "本地队列",
+              "quote": "P 带着一个本地队列, 减少了全局锁竞争",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "抢占",
+              "quote": "14 之后还加了基于信号的抢占",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "work stealing",
+              "quote": "某个 P 的队列空了会去别的 P 那里 work stealing",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "用户态",
+              "quote": "相比线程模型, 切换发生在用户态, 不用陷入内核",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "GMP",
+            "work stealing",
+            "抢占",
+            "本地队列",
+            "用户态"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "GMP",
+              "quote": "GMP 里 G 是 goroutine, M 是系统线程, P 是处理器上下文",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "本地队列",
+              "quote": "P 带着一个本地队列, 减少了全局锁竞争",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "抢占",
+              "quote": "14 之后还加了基于信号的抢占",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "work stealing",
+              "quote": "某个 P 的队列空了会去别的 P 那里 work stealing",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_006",
+              "question_id": "q_go_gmp",
+              "kind": "support",
+              "matched": "用户态",
+              "quote": "相比线程模型, 切换发生在用户态, 不用陷入内核",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 7,
+      "stage": "TECH_FUNDAMENTAL",
+      "question_id": "q_go_gc",
+      "competency": "language_core",
+      "question": "Go 的 GC 是怎么做的? 什么情况下会造成 STW 变长?",
+      "answer": "Go 用的是三色标记加混合写屏障, 标记阶段和用户程序并发执行, 所以标记过程本身不需要 STW。STW 主要出现在开启写屏障和标记终止这两个很短的阶段。如果对象分配速率太高, 辅助标记跟不上, 或者栈扫描任务太重, STW 就会变长。",
+      "duration_ms": 150000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "三色",
+            "写屏障",
+            "STW",
+            "混合写屏障"
+          ],
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_007",
+              "question_id": "q_go_gc",
+              "kind": "support",
+              "matched": "STW / 三色 / 写屏障 / 混合写屏障",
+              "quote": "Go 用的是三色标记加混合写屏障, 标记阶段和用户程序并发执行, 所以标记过程本身不需要 STW",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "命中 4/5 个判定要点: L4 精通"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "三色",
+            "写屏障",
+            "STW",
+            "混合写屏障"
+          ],
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_007",
+              "question_id": "q_go_gc",
+              "kind": "support",
+              "matched": "STW / 三色 / 写屏障 / 混合写屏障",
+              "quote": "Go 用的是三色标记加混合写屏障, 标记阶段和用户程序并发执行, 所以标记过程本身不需要 STW",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "命中 4/5 个判定要点: L4 精通"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "STW",
+            "三色",
+            "写屏障",
+            "混合写屏障"
+          ],
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_007",
+              "question_id": "q_go_gc",
+              "kind": "support",
+              "matched": "STW / 三色 / 写屏障 / 混合写屏障",
+              "quote": "Go 用的是三色标记加混合写屏障, 标记阶段和用户程序并发执行, 所以标记过程本身不需要 STW",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.86,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 8,
+      "stage": "TECH_FUNDAMENTAL",
+      "question_id": "q_go_gc.p1",
+      "competency": "language_core",
+      "question": "你刚才没有提到 并发标记, 能展开讲讲吗?",
+      "answer": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+      "duration_ms": 40000000000,
+      "is_probe": true,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_008",
+              "question_id": "q_go_gc.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/1 个判定要点: L1 未掌握"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_008",
+              "question_id": "q_go_gc.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/1 个判定要点: L1 未掌握"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_008",
+              "question_id": "q_go_gc.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 9,
+      "stage": "TECH_FUNDAMENTAL",
+      "question_id": "q_go_gc.p1.p2",
+      "competency": "language_core",
+      "question": "换个角度问: 如果现在重新设计, 并发标记 这一块你会怎么处理?",
+      "answer": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+      "duration_ms": 40000000000,
+      "is_probe": true,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_009",
+              "question_id": "q_go_gc.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/1 个判定要点: L1 未掌握"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_009",
+              "question_id": "q_go_gc.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/1 个判定要点: L1 未掌握"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "并发标记"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_009",
+              "question_id": "q_go_gc.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 10,
+      "stage": "TECH_FUNDAMENTAL",
+      "question_id": "q_dist_idem",
+      "competency": "distributed_system",
+      "question": "MQ 消费端怎么保证幂等? 如果是跨服务的场景呢?",
+      "answer": "消费端幂等我会用唯一键做去重, 把业务 ID 加消息 ID 拼成唯一索引, 写库时靠唯一约束兜底。跨服务场景下单靠本地去重不够, 通常引入一张状态机表记录消费状态, 让下游操作满足最终一致, 失败的再靠定时补偿。",
+      "duration_ms": 140000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L4 精通",
+          "matched": [
+            "幂等",
+            "去重",
+            "唯一键",
+            "状态机",
+            "最终一致"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "去重 / 唯一键 / 幂等",
+              "quote": "消费端幂等我会用唯一键做去重, 把业务 ID 加消息 ID 拼成唯一索引, 写库时靠唯一约束兜底",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "最终一致 / 状态机",
+              "quote": "跨服务场景下单靠本地去重不够, 通常引入一张状态机表记录消费状态, 让下游操作满足最终一致, 失败的再靠定时补偿",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "幂等",
+            "去重",
+            "唯一键",
+            "状态机",
+            "最终一致"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "去重 / 唯一键 / 幂等",
+              "quote": "消费端幂等我会用唯一键做去重, 把业务 ID 加消息 ID 拼成唯一索引, 写库时靠唯一约束兜底",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "最终一致 / 状态机",
+              "quote": "跨服务场景下单靠本地去重不够, 通常引入一张状态机表记录消费状态, 让下游操作满足最终一致, 失败的再靠定时补偿",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "命中 5/5 个判定要点: L5 专家"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L4 精通",
+          "matched": [
+            "去重",
+            "唯一键",
+            "幂等",
+            "最终一致",
+            "状态机"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "去重 / 唯一键 / 幂等",
+              "quote": "消费端幂等我会用唯一键做去重, 把业务 ID 加消息 ID 拼成唯一索引, 写库时靠唯一约束兜底",
+              "at_ms": 0
+            },
+            {
+              "turn_id": "t_010",
+              "question_id": "q_dist_idem",
+              "kind": "support",
+              "matched": "最终一致 / 状态机",
+              "quote": "跨服务场景下单靠本地去重不够, 通常引入一张状态机表记录消费状态, 让下游操作满足最终一致, 失败的再靠定时补偿",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.95,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 11,
+      "stage": "SCENARIO_DESIGN",
+      "question_id": "q_arch_limit",
+      "competency": "architecture",
+      "question": "设计一个支撑招聘旺季的限流系统: 峰值每秒 5 万请求, 要求故障时不拖垮主站。你会怎么拆?",
+      "answer": "我会在入口做一层限流, 对热点接口单独配置阈值, 同时准备降级开关, 一旦限流组件本身故障就整体放行, 保证不拖垮主站。",
+      "duration_ms": 120000000000,
+      "is_probe": false,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L2 了解",
+          "matched": [
+            "热点",
+            "降级"
+          ],
+          "missing": [
+            "令牌桶",
+            "滑动窗口",
+            "容量估算"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_011",
+              "question_id": "q_arch_limit",
+              "kind": "support",
+              "matched": "热点 / 降级",
+              "quote": "我会在入口做一层限流, 对热点接口单独配置阈值, 同时准备降级开关, 一旦限流组件本身故障就整体放行, 保证不拖垮主站",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.68,
+          "rationale": "命中 2/5 个判定要点: L2 了解"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L2 了解",
+          "matched": [
+            "热点",
+            "降级"
+          ],
+          "missing": [
+            "令牌桶",
+            "滑动窗口",
+            "容量估算"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_011",
+              "question_id": "q_arch_limit",
+              "kind": "support",
+              "matched": "热点 / 降级",
+              "quote": "我会在入口做一层限流, 对热点接口单独配置阈值, 同时准备降级开关, 一旦限流组件本身故障就整体放行, 保证不拖垮主站",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.68,
+          "rationale": "命中 2/5 个判定要点: L2 了解"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L2 了解",
+          "matched": [
+            "热点",
+            "降级"
+          ],
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_011",
+              "question_id": "q_arch_limit",
+              "kind": "support",
+              "matched": "热点 / 降级",
+              "quote": "我会在入口做一层限流, 对热点接口单独配置阈值, 同时准备降级开关, 一旦限流组件本身故障就整体放行, 保证不拖垮主站",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.68,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 12,
+      "stage": "SCENARIO_DESIGN",
+      "question_id": "q_arch_limit.p1",
+      "competency": "architecture",
+      "question": "你刚才没有提到 令牌桶, 能展开讲讲吗?",
+      "answer": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+      "duration_ms": 40000000000,
+      "is_probe": true,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_012",
+              "question_id": "q_arch_limit.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/3 个判定要点: L1 未掌握"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_012",
+              "question_id": "q_arch_limit.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/3 个判定要点: L1 未掌握"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_012",
+              "question_id": "q_arch_limit.p1",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 13,
+      "stage": "SCENARIO_DESIGN",
+      "question_id": "q_arch_limit.p1.p2",
+      "competency": "architecture",
+      "question": "换个角度问: 如果现在重新设计, 容量估算 这一块你会怎么处理?",
+      "answer": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+      "duration_ms": 40000000000,
+      "is_probe": true,
+      "scored": true,
+      "verdict": {
+        "primary": {
+          "model": "interviewer-model-a",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_013",
+              "question_id": "q_arch_limit.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/3 个判定要点: L1 未掌握"
+        },
+        "secondary": {
+          "model": "reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_013",
+              "question_id": "q_arch_limit.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "命中 0/3 个判定要点: L1 未掌握"
+        },
+        "gap": 0,
+        "arbitrated": false,
+        "needs_human_review": false,
+        "final": {
+          "model": "interviewer-model-a + reviewer-model-b",
+          "level": "L1 未掌握",
+          "missing": [
+            "令牌桶",
+            "容量估算",
+            "滑动窗口"
+          ],
+          "evidence": [
+            {
+              "turn_id": "t_013",
+              "question_id": "q_arch_limit.p1.p2",
+              "kind": "against",
+              "quote": "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。",
+              "at_ms": 0
+            }
+          ],
+          "confidence": 0.5,
+          "rationale": "双模型分歧 0 级, 在容忍范围内, 取保守值"
+        }
+      }
+    },
+    {
+      "index": 14,
+      "stage": "CANDIDATE_QA",
+      "question_id": "q_candidate_qa",
+      "question": "我的问题问完了, 你有什么想了解的吗?",
+      "answer": "想了解下团队现在的技术栈, 以及新人上手一般是什么节奏。",
+      "duration_ms": 45000000000,
+      "is_probe": false,
+      "scored": false
+    },
+    {
+      "index": 15,
+      "stage": "WRAP_UP",
+      "question_id": "q_wrap",
+      "question": "今天我们就聊到这里, 后续结果会在 3 个工作日内同步给你, 感谢你的时间。",
+      "answer": "好的, 谢谢面试官, 那我等结果。",
+      "duration_ms": 15000000000,
+      "is_probe": false,
+      "scored": false
+    }
+  ]
+}

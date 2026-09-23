@@ -81,11 +81,12 @@ type Engine struct {
 	stageElapsed time.Duration
 	askedInStage int
 
-	turns    []Turn
-	used     map[string]bool
-	coverage map[string]bool
-	started  bool
-	finished bool
+	turns       []Turn
+	used        map[string]bool
+	coverage    map[string]bool
+	probedFocus map[string]bool
+	started     bool
+	finished    bool
 }
 
 // Option 用于配置引擎。
@@ -115,15 +116,16 @@ func WithScorers(primary, secondary, arbiter scoring.Scorer, tolerance int) Opti
 // 一场面试 —— 这是离线自测基线的价值: CI 里不依赖网络也能回归评分逻辑。
 func NewEngine(plan Plan, bank *Bank, total time.Duration, opts ...Option) *Engine {
 	e := &Engine{
-		plan:      plan,
-		bank:      bank,
-		budget:    NewBudget(total),
-		primary:   scoring.NewKeywordScorer("rule-baseline-a", 0),
-		secondary: scoring.NewKeywordScorer("rule-baseline-b", 0),
-		tolerance: 1,
-		used:      make(map[string]bool),
-		coverage:  make(map[string]bool),
-		sessionID: fmt.Sprintf("s_%d", time.Now().Unix()),
+		plan:        plan,
+		bank:        bank,
+		budget:      NewBudget(total),
+		primary:     scoring.NewKeywordScorer("rule-baseline-a", 0),
+		secondary:   scoring.NewKeywordScorer("rule-baseline-b", 0),
+		tolerance:   1,
+		used:        make(map[string]bool),
+		coverage:    make(map[string]bool),
+		probedFocus: make(map[string]bool),
+		sessionID:   fmt.Sprintf("s_%d", time.Now().Unix()),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -239,7 +241,7 @@ func (e *Engine) Submit(answer string, took time.Duration) (Decision, error) {
 		if e.probeDepth > e.maxProbeUsed {
 			e.maxProbeUsed = e.probeDepth
 		}
-		probe := probeFor(q, turn.Verdict.Final, e.probeDepth)
+		probe := probeFor(q, turn.Verdict.Final, e.probeDepth, e.probedFocus)
 		e.cur = &probe
 		return Decision{
 			Action:     ActionProbe,
@@ -252,7 +254,7 @@ func (e *Engine) Submit(answer string, took time.Duration) (Decision, error) {
 	}
 
 	// 决策 2: 当前阶段收口?
-	if spec, ok := e.plan.Spec(e.stage); ok && StageDone(spec, e.askedInStage, e.stageElapsed) {
+	if spec, ok := e.plan.Spec(e.stage); ok && ShouldCloseStage(spec, e.askedInStage, e.stageElapsed) {
 		return e.advance(&turn), nil
 	}
 
@@ -324,21 +326,53 @@ func (e *Engine) finish(turn *Turn) Decision {
 // 真实实现里这一步由"追问 Agent"(大模型)承担: 它要理解候选人为什么漏掉
 // 这个点, 并生成贴着上下文的问题。这里给出一个确定性的可测版本,
 // 保证离线也能验证"追问到收敛"的完整链路。
-func probeFor(parent Question, res scoring.Result, depth int) Question {
-	focus := "刚才那套方案的取舍"
-	if len(res.Missing) > 0 {
+func probeFor(parent Question, res scoring.Result, depth int, asked map[string]bool) Question {
+	root := rootQuestionID(parent.ID)
+
+	// 优先挑一个本次回答里"还没被追问过"的缺失要点,
+	// 避免连续两轮问同一句话。
+	focus := ""
+	for _, m := range res.Missing {
+		if !asked[root+"|"+m] {
+			focus = m
+			break
+		}
+	}
+	if focus == "" && len(res.Missing) > 0 {
 		focus = res.Missing[0]
 	}
+
+	text := "这套方案你在取舍上是怎么权衡的?"
+	if focus != "" {
+		key := root + "|" + focus
+		repeat := asked[key]
+		asked[key] = true
+
+		text = fmt.Sprintf("你刚才没有提到 %s, 能展开讲讲吗?", focus)
+		if repeat || depth >= 2 {
+			// 同一个点被追问到第二层时换一种问法, 而不是把原话重复一遍。
+			text = fmt.Sprintf("换个角度问: 如果现在重新设计, %s 这一块你会怎么处理?", focus)
+		}
+	}
+
 	return Question{
 		ID:           fmt.Sprintf("%s.p%d", parent.ID, depth),
 		Stage:        parent.Stage,
 		Competency:   parent.Competency,
-		Text:         fmt.Sprintf("你刚才没有提到 %s, 能展开讲讲吗?", focus),
+		Text:         text,
 		Keywords:     append([]string(nil), res.Missing...),
 		AntiPatterns: parent.AntiPatterns,
 		Importance:   parent.Importance,
 		MaxProbe:     parent.MaxProbe,
 	}
+}
+
+// rootQuestionID 从 "q_resume_zset.p2" 还原出 "q_resume_zset"。
+func rootQuestionID(id string) string {
+	if i := strings.Index(id, ".p"); i >= 0 {
+		return id[:i]
+	}
+	return id
 }
 
 func bindTurnID(v *scoring.Verdict, turnID string) {
@@ -409,7 +443,8 @@ func (e *Engine) Report() Report {
 	type agg struct {
 		best     scoring.Level
 		evidence []scoring.Evidence
-		concerns []string
+		missing  map[string]bool
+		matched  map[string]bool
 		turns    int
 		confSum  float64
 	}
@@ -442,7 +477,7 @@ func (e *Engine) Report() Report {
 
 		a, ok := byCompetency[t.Competency]
 		if !ok {
-			a = &agg{}
+			a = &agg{missing: map[string]bool{}, matched: map[string]bool{}}
 			byCompetency[t.Competency] = a
 			order = append(order, t.Competency)
 		}
@@ -453,7 +488,12 @@ func (e *Engine) Report() Report {
 			a.best = v.Final.Level
 		}
 		a.evidence = append(a.evidence, v.Final.Evidence...)
-		a.concerns = append(a.concerns, v.Final.Missing...)
+		for _, m := range v.Final.Missing {
+			a.missing[m] = true
+		}
+		for _, m := range v.Final.Matched {
+			a.matched[m] = true
+		}
 		a.confSum += v.Final.Confidence
 	}
 
@@ -472,7 +512,7 @@ func (e *Engine) Report() Report {
 			Confidence: round2(conf),
 			Turns:      a.turns,
 			Evidence:   a.evidence,
-			Concerns:   dedupSorted(a.concerns),
+			Concerns:   unresolved(a.missing, a.matched),
 		})
 		levelSum += float64(a.best.Number())
 		confSum += conf
@@ -550,6 +590,20 @@ func dedupSorted(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// unresolved 返回"被判为缺失、且整场面试都没被答上"的要点。
+//
+// 已经在后续追问里补上的要点不算缺口: 否则报告会一直挂着候选人
+// 后来已经解释清楚的疑点, 面试官看完会觉得系统没在听他说话。
+func unresolved(missing, matched map[string]bool) []string {
+	var out []string
+	for m := range missing {
+		if !matched[m] {
+			out = append(out, m)
+		}
+	}
+	return dedupSorted(out)
 }
 
 func round2(v float64) float64 {

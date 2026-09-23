@@ -71,13 +71,13 @@ func (b *Budget) ShouldProbe(importance Importance) bool {
 	return true
 }
 
-// StageDone 判断当前阶段是否该收口。
+// ShouldCloseStage 判断当前阶段是否该收口。
 //
 // 两个触发条件:
 //  1. 阶段时间用尽;
 //  2. 已问够最少题数, 且剩余时间不足以再问完一轮(90 秒) —— 提前收口,
 //     避免出现"开了个头就要结束"的尴尬体验。
-func StageDone(spec StageSpec, asked int, stageElapsed time.Duration) bool {
+func ShouldCloseStage(spec StageSpec, asked int, stageElapsed time.Duration) bool {
 	if spec.Budget > 0 && stageElapsed >= spec.Budget {
 		return true
 	}

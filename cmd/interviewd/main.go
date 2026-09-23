@@ -27,6 +27,7 @@ func main() {
 	minutes := flag.Int("minutes", 45, "本轮面试时长预算 (分钟)")
 	maxTurns := flag.Int("max-turns", 60, "单场最大问答轮数 (安全上限)")
 	out := flag.String("out", "", "报告 JSON 输出路径, 留空则只打印成绩单")
+	strict := flag.Bool("strict", false, "启用更严格的复核模型, 演示双模型分歧链路")
 	flag.Parse()
 
 	total := time.Duration(*minutes) * time.Minute
@@ -34,13 +35,18 @@ func main() {
 	plan.Round = *round
 	bank := orchestrator.DefaultBank()
 
+	// 复核模型的严格度。默认与主模型一致(演示正常链路);
+	// -strict 让复核模型整体保守一级, 用来观察"双模型分歧"如何进入报告。
+	// 分歧超过容忍度时的三方仲裁由 internal/scoring 的单元测试覆盖。
+	reviewBias := 0
+	if *strict {
+		reviewBias = -1
+	}
+
 	engine := orchestrator.NewEngine(plan, bank, total,
 		orchestrator.WithScorers(
-			// 主面试官模型与复核模型故意设置不同的严格度, 用来演示
-			// "双模型分歧 -> 取保守值" 的链路。
-			// 分歧超过容忍度时的三方仲裁由单元测试覆盖 (见 scoring_test.go)。
 			scoring.NewKeywordScorer("interviewer-model-a", 0),
-			scoring.NewKeywordScorer("reviewer-model-b", -1),
+			scoring.NewKeywordScorer("reviewer-model-b", reviewBias),
 			scoring.NewKeywordScorer("arbiter-model-c", 0),
 			1,
 		),

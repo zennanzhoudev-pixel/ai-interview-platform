@@ -17,6 +17,15 @@ type KeywordScorer struct {
 	bias  int
 }
 
+// maxLevel 是规则评分器能给出的最高等级。
+//
+// 关键词命中率只能证明"候选人说到了这些点", 证明不了他"能提出我们没想到的
+// 跨系统方案" —— 而后者才是 L5 的定义。所以规则评分器封顶 L4,
+// L5 只能由大模型评分器或人类面试官给出。
+//
+// 这不是妥协, 而是有意的能力边界: 规则拿不准的地方就不要装作拿得准。
+const maxLevel = LevelAdvanced
+
 // NewKeywordScorer 构造规则评分器。bias 为级别偏移, 负数表示更严格。
 func NewKeywordScorer(model string, bias int) *KeywordScorer {
 	return &KeywordScorer{model: model, bias: bias}
@@ -97,6 +106,11 @@ func (s *KeywordScorer) Score(a Answer) Result {
 	}
 
 	res.Level = res.Level.Bias(s.bias)
+	if res.Level > maxLevel {
+		res.Level = maxLevel
+	}
+	// 合并重复证据: 一句话命中多个要点时只留一条原话。
+	res.Evidence = dedupEvidence(res.Evidence)
 	return res.Enforce()
 }
 

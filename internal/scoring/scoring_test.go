@@ -1,12 +1,15 @@
 package scoring
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // stubScorer 是一个可控的评分器, 用来构造"双模型分歧"等边界场景。
 type stubScorer struct {
-	name      string
-	level     Level
-	hasProof  bool
+	name     string
+	level    Level
+	hasProof bool
 }
 
 func (s stubScorer) Name() string { return s.name }
@@ -30,14 +33,49 @@ func TestKeywordScorerMapsRatioToLevel(t *testing.T) {
 		Text:       "我们用了 ZSet 做索引, score 存权重, 排序走有序结构, 内存也做了分片。",
 		Keywords:   []string{"ZSet", "score", "排序", "内存"},
 	})
-	if got.Level != LevelExpert {
-		t.Fatalf("四个要点全中应为 L5, 实际 %s", got.Level)
+	// 规则评分器封顶 L4: 关键词全中不等于 L5 专家。
+	if got.Level != LevelAdvanced {
+		t.Fatalf("四个要点全中应为 L4(规则评分器上限), 实际 %s", got.Level)
 	}
-	if len(got.Evidence) != 4 {
-		t.Fatalf("每条要点都应绑定证据, 实际 %d 条", len(got.Evidence))
+	if len(got.Evidence) != 1 {
+		t.Fatalf("同一句原话命中多个要点时应合并为一条证据, 实际 %d 条", len(got.Evidence))
+	}
+	for _, kw := range []string{"ZSet", "score", "排序", "内存"} {
+		if !strings.Contains(got.Evidence[0].Matched, kw) {
+			t.Fatalf("合并后的证据应保留命中要点 %q, 实际 %q", kw, got.Evidence[0].Matched)
+		}
 	}
 	if len(got.Missing) != 0 {
 		t.Fatalf("不应有缺失要点, 实际 %v", got.Missing)
+	}
+}
+
+// 规则评分器不允许给出 L5: 那是大模型或人类面试官才能下的判断。
+func TestKeywordScorerNeverReachesExpertLevel(t *testing.T) {
+	s := NewKeywordScorer("rule", 0)
+	got := s.Score(Answer{
+		QuestionID: "q1",
+		Text:       "ABC 全部覆盖。",
+		Keywords:   []string{"ABC"},
+	})
+	if got.Level == LevelExpert {
+		t.Fatal("规则评分器不应给出 L5 专家")
+	}
+	if got.Level != maxLevel {
+		t.Fatalf("满分应为规则评分器上限 %s, 实际 %s", maxLevel, got.Level)
+	}
+}
+
+// 不同句子里的证据必须分开保留, 否则复核时就定位不到具体原话。
+func TestKeywordScorerKeepsEvidenceFromDifferentSentences(t *testing.T) {
+	s := NewKeywordScorer("rule", 0)
+	got := s.Score(Answer{
+		QuestionID: "q1",
+		Text:       "我们用了 ZSet 做索引。score 是权重。",
+		Keywords:   []string{"ZSet", "score"},
+	})
+	if len(got.Evidence) != 2 {
+		t.Fatalf("不同句子的证据应分别保留, 实际 %d 条", len(got.Evidence))
 	}
 }
 

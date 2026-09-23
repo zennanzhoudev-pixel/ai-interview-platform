@@ -4,17 +4,18 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // Verdict 是双模型交叉评分的完整结论, 也是落库时 evaluation_dim 的来源。
 type Verdict struct {
-	Primary          Result `json:"primary"`
-	Secondary        Result `json:"secondary"`
+	Primary          Result  `json:"primary"`
+	Secondary        Result  `json:"secondary"`
 	Arbiter          *Result `json:"arbiter,omitempty"`
-	Gap              int    `json:"gap"`      // 两个模型的级别差
-	Arbitrated       bool   `json:"arbitrated"` // 是否触发了仲裁
-	NeedsHumanReview bool   `json:"needs_human_review"`
-	Final            Result `json:"final"`
+	Gap              int     `json:"gap"`        // 两个模型的级别差
+	Arbitrated       bool    `json:"arbitrated"` // 是否触发了仲裁
+	NeedsHumanReview bool    `json:"needs_human_review"`
+	Final            Result  `json:"final"`
 }
 
 // CrossCheck 执行双模型交叉评分。
@@ -128,18 +129,47 @@ func unionAll(groups ...[]string) []string {
 	return out
 }
 
-// dedupEvidence 去掉重复证据。同一条原话被两个模型同时命中时只保留一条,
-// 但证据本身保留双方(真实链路上会带各自的时间戳)。
+// dedupEvidence 合并重复证据: 同一句原话不论命中几个要点、被几个模型命中,
+// 都只保留一条, 命中的要点合并展示。
+//
+// 为什么要合并: 候选人一句话里常常同时命中 4 个要点, 如果每个要点占一条证据,
+// 报告里就会出现 4 行一模一样的原话。人工复核的时间是稀缺资源,
+// 证据列表必须一眼能扫完。
 func dedupEvidence(in []Evidence) []Evidence {
-	seen := make(map[string]struct{}, len(in))
+	index := make(map[string]int, len(in))
 	var out []Evidence
+	var matched [][]string
+
 	for _, e := range in {
-		key := string(e.Kind) + "|" + e.Matched + "|" + e.Quote
-		if _, ok := seen[key]; ok {
+		key := string(e.Kind) + "|" + e.Quote
+		i, ok := index[key]
+		if !ok {
+			i = len(out)
+			index[key] = i
+			out = append(out, e)
+			matched = append(matched, nil)
+		}
+		if e.Matched == "" {
 			continue
 		}
-		seen[key] = struct{}{}
-		out = append(out, e)
+		dup := false
+		for _, m := range matched[i] {
+			if m == e.Matched {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			matched[i] = append(matched[i], e.Matched)
+		}
+	}
+
+	for i := range out {
+		if len(matched[i]) == 0 {
+			continue
+		}
+		sort.Strings(matched[i])
+		out[i].Matched = strings.Join(matched[i], " / ")
 	}
 	return out
 }

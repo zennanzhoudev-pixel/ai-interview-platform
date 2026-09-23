@@ -88,12 +88,12 @@ const (
 // 它是整份报告的基石: 面试官点开一个维度分, 能直接跳到对应录音位置,
 // 听到候选人当时说了什么。
 type Evidence struct {
-	TurnID     string       `json:"turn_id"`
-	QuestionID string       `json:"question_id"`
-	Kind       EvidenceKind `json:"kind"`
-	Matched    string       `json:"matched,omitempty"` // 命中的判定要点
-	Quote      string       `json:"quote"`             // 候选人原话
-	At         time.Duration `json:"at_ms"`            // 距面试开始的偏移, 用于录音回放定位
+	TurnID     string        `json:"turn_id"`
+	QuestionID string        `json:"question_id"`
+	Kind       EvidenceKind  `json:"kind"`
+	Matched    string        `json:"matched,omitempty"` // 命中的判定要点
+	Quote      string        `json:"quote"`             // 候选人原话
+	At         time.Duration `json:"at_ms"`             // 距面试开始的偏移, 用于录音回放定位
 }
 
 // Answer 是一次待评分的问答。
