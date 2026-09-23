@@ -25,7 +25,16 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   profile: { name: "陈雨", company: "示例科技", position: "高级后端工程师", interviewer: "林澈" },
-  prep: { step: 0, resume: "", deviceChecked: false, micLevel: 0, consentRecording: true, consentScoring: true },
+  prep: {
+    step: 0,
+    resume: "",
+    resumeSkipped: false,
+    deviceChecked: false,
+    micLevel: 0,
+    consentRecording: true,
+    consentScoring: true,
+    overviewSeen: false,
+  },
   round: 1,
   minutes: 45,
   session: null,
@@ -189,22 +198,64 @@ function greetingText() {
   return "晚上好。";
 }
 
-function prepCompletedSteps() {
-  let n = 1; // 面试概览默认完成
-  if (state.prep.resume.trim()) n++;
-  if (state.prep.deviceChecked) n++;
-  if (state.prep.consentRecording) n++;
-  if (n === 4) n++; // 前面全过 -> 准备完成
-  return Math.min(n, 5);
+// prepChecklist 是"准备进度"的唯一数据来源。
+//
+// 之前这里有两套算法: 概览按"实际完成了哪几项"数数, 准备页显示"当前翻到第几步"。
+// 两者量纲不同, 于是把 5 步一路点到底就会显示 5/5, 而概览还停在 3/5 —— 数字互相打架。
+// 现在两个页面都只读这份清单, 并且步骤条的"已完成"也按完成状态染色, 不再按位置。
+//
+// 简历允许显式跳过: 强制填简历会把"我只是想先跑一遍"的人挡在门外,
+// 而"跳过"本身也会留下记录, 不会伪装成已完成。
+function prepChecklist() {
+  const p = state.prep;
+  const resumeDone = String(p.resume || "").trim().length > 0 || p.resumeSkipped;
+  const items = [
+    { key: "overview", label: "面试概览", done: !!p.overviewSeen },
+    { key: "resume", label: "简历", done: resumeDone, skipped: p.resumeSkipped && !String(p.resume || "").trim() },
+    { key: "device", label: "设备检查", done: !!p.deviceChecked },
+    { key: "consent", label: "数据同意", done: !!p.consentRecording },
+  ];
+  items.push({ key: "done", label: "准备完成", done: items.every((it) => it.done) });
+  return items;
+}
+
+function prepProgress() {
+  const items = prepChecklist();
+  return { items, done: items.filter((it) => it.done).length, total: items.length };
+}
+
+function firstPendingStep() {
+  const idx = prepChecklist().findIndex((it) => !it.done);
+  return idx === -1 ? 4 : idx;
+}
+
+function stepperHTML(items) {
+  return items.map((it, i) => {
+    const cls = i === state.prep.step ? "active" : it.done ? "done" : "";
+    const mark = it.done && i !== state.prep.step ? "✓" : String(i + 1);
+    return `<li class="${cls}"><span class="num">${mark}</span>${it.label}</li>`;
+  }).join("");
+}
+
+// refreshPrepProgressUI 只刷新"进度"相关的部分。
+// 不能在这里重跑 renderPrep: 渲染会触发设备枚举, 枚举完成又要刷新进度,
+// 那就会变成渲染与枚举互相触发的死循环。
+function refreshPrepProgressUI() {
+  const { items, done, total } = prepProgress();
+  const count = $("prepStepCount");
+  if (count) count.textContent = `第 ${state.prep.step + 1} / 5 步 · 已完成 ${done} / ${total} 项`;
+  const stepper = $("stepper");
+  if (stepper) stepper.innerHTML = stepperHTML(items);
 }
 
 function renderOverview() {
   const p = state.profile;
   $("greeting").textContent = greetingText() + p.name + "。";
-  const done = prepCompletedSteps();
-  $("overviewLede").textContent = done >= 5
+  const { items, done, total } = prepProgress();
+  const allDone = done === total;
+  $("overviewLede").textContent = allDone
     ? "准备工作已完成，可以进入面试房间。"
-    : `准备工作已完成 ${done} / 5，还差一点。`;
+    : `准备工作已完成 ${done} / ${total}，还差一点。`;
   $("navAvatar").textContent = initials(p.name);
   $("ovAvatar").textContent = (p.company || "OS").slice(0, 2).toUpperCase();
   $("ovPosition").textContent = p.position;
@@ -214,13 +265,14 @@ function renderOverview() {
   $("ovTime").textContent = new Date(Date.now() + 2 * 864e5)
     .toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-  const pct = Math.round((done / 5) * 100);
+  const pct = Math.round((done / total) * 100);
   $("ovPrepPct").textContent = pct + "%";
   $("ovPrepBar").style.width = pct + "%";
-  $("ovPrepHint").textContent = done >= 5
+  const pending = items.filter((it) => !it.done && it.key !== "done").map((it) => it.label);
+  $("ovPrepHint").textContent = allDone
     ? "全部就绪，可以开始。"
-    : "还需完成" + PREP_STEPS.slice(done, 4).map((s) => s[1]).join("、") + "。";
-  $("btnContinuePrep").textContent = done >= 5 ? "进入面试房间" : "继续准备";
+    : `还需完成${pending.join("、")}。`;
+  $("btnContinuePrep").textContent = allDone ? "进入面试房间" : "继续准备";
 }
 
 function roundLabel(round) {
@@ -233,12 +285,32 @@ function roundLabel(round) {
 function renderPrep() {
   const p = state.profile;
   $("prepContext").textContent = `${p.company} · ${p.position}`;
-  $("prepStepCount").textContent = `第 ${state.prep.step + 1} / 5 步`;
+  const { items, done, total } = prepProgress();
+  // 同时给出"翻到第几步"和"完成了几项": 前者是导航位置, 后者才是进度。
+  // 只显示前者会让人以为翻到底就等于做完了 —— 这正是之前两个数字打架的根源。
+  $("prepStepCount").textContent = `第 ${state.prep.step + 1} / 5 步 · 已完成 ${done} / ${total} 项`;
 
-  $("stepper").innerHTML = PREP_STEPS.map(([key, label], i) => {
-    const cls = i === state.prep.step ? "active" : i < state.prep.step ? "done" : "";
-    return `<li class="${cls}"><span class="num">${i + 1}</span>${label}</li>`;
-  }).join("");
+  $("stepper").innerHTML = stepperHTML(items);
+
+  // 最后一步不是"走过场", 它要把清单摊开: 哪些已完成、哪些还欠着。
+  const allDone = done === total;
+  const checklistRows = items.map((it) => `
+    <li>
+      <span>${it.done ? "✓" : "○"} ${it.label}${it.skipped ? "（已跳过）" : ""}</span>
+      <b style="color:${it.done ? "var(--accent)" : "var(--warn)"}">${it.done ? "已完成" : "待完成"}</b>
+    </li>`).join("");
+  const donePanel = `
+    <span class="pill ${allDone ? "mint" : "warn"}">${allDone ? "准备完成" : `还差 ${total - done} 项`}</span>
+    <h2 class="panel-title">${allDone ? "可以开始了。" : "还有几项没完成。"}</h2>
+    <p class="muted">${allDone
+      ? "面试过程中你可以随时看到当前阶段、已用时长与追问状态。每个评分结论都会附带你的原话作为证据。"
+      : "补齐下面标记为「待完成」的项目就能进入面试房间。简历可以跳过，设备检查与数据同意是必须的。"}</p>
+    <ul class="checklist">${checklistRows}</ul>
+    <div class="checklist" style="margin-top:6px">
+      <li><span>应聘岗位</span><b>${escapeHTML(p.position)}</b></li>
+      <li><span>公司与面试官</span><b>${escapeHTML(p.company)} · ${escapeHTML(p.interviewer)}</b></li>
+      <li><span>时长预算</span><b>${state.minutes} 分钟</b></li>
+    </div>`;
 
   const panels = {
     overview: `
@@ -261,9 +333,14 @@ function renderPrep() {
           placeholder="例：IM 对话平台 Redis 存储改造，用 ZSet 索引把查询 RT 降低 70%">${escapeHTML(state.prep.resume)}</textarea>
       </label>
       <p class="muted small" style="margin-top:10px">
-        说明：服务端的简历解析与原文定位尚未实现，这里填写的内容只保存在你的浏览器本地，
-        用于面试前自查，不会上传、也不会参与评分。
-      </p>`,
+        填写后会在开始面试时提交给服务端做结构化解析（抽取技能、项目、时间线，并记录原文位置）。
+        当追问涉及的要点正好出现在你的简历里，面试官会直接引用简历原话。
+      </p>
+      <div class="actions" style="margin-top:4px">
+        <button class="btn outline small" type="button" id="prepSkipResume">
+          ${state.prep.resumeSkipped ? "已跳过（点击取消跳过）" : "跳过简历"}
+        </button>
+      </div>`,
 
     device: `
       <h2 class="panel-title">设备检查</h2>
@@ -290,23 +367,17 @@ function renderPrep() {
         同意记录会带上时间与来源 IP 保存在服务端，你可以在「个人资料」里随时核对。
       </p>`,
 
-    done: `
-      <span class="pill mint">准备完成</span>
-      <h2 class="panel-title">可以开始了。</h2>
-      <p class="muted">面试过程中你可以随时看到当前阶段、已用时长与追问状态。
-      每个评分结论都会附带你的原话作为证据。</p>
-      <ul class="checklist">
-        <li><span>应聘岗位</span><b>${escapeHTML(p.position)}</b></li>
-        <li><span>公司与面试官</span><b>${escapeHTML(p.company)} · ${escapeHTML(p.interviewer)}</b></li>
-        <li><span>时长预算</span><b>${state.minutes} 分钟</b></li>
-        <li><span>数据同意</span><b>${state.prep.consentRecording ? "已同意" : "未同意"}</b></li>
-      </ul>`,
+    done: donePanel,
   };
 
   $("prepPanel").innerHTML = panels[PREP_STEPS[state.prep.step][0]] +
     `<div class="actions">
        <button class="btn outline" id="prepPrev" ${state.prep.step === 0 ? "disabled" : ""}>上一步</button>
-       <button class="btn primary" id="prepNext">${state.prep.step === 4 ? "进入面试房间" : "继续"}</button>
+       <button class="btn primary" id="prepNext">${
+         state.prep.step !== 4 ? "继续"
+           : allDone ? "进入面试房间"
+           : `去完成：${items[firstPendingStep()].label}`
+       }</button>
      </div>`;
 
   wirePrepPanel();
@@ -318,10 +389,13 @@ function wirePrepPanel() {
   if (prev) prev.onclick = () => { state.prep.step = Math.max(0, state.prep.step - 1); renderPrep(); };
   if (next) next.onclick = () => {
     if (state.prep.step === 4) {
-      if (!state.prep.consentRecording) {
-        state.prep.step = 3;
+      const pending = firstPendingStep();
+      // 清单没走完就不进房间, 而是把人送到缺的那一步 ——
+      // 之前这里只在"未同意录音"时兜底, 其余未完成项会被静默放过。
+      if (pending !== 4) {
+        state.prep.step = pending;
         renderPrep();
-        toast("需要同意录音后才能开始面试");
+        toast(`还差「${prepChecklist()[pending].label}」，完成后即可开始`);
         return;
       }
       startInterview();
@@ -333,6 +407,12 @@ function wirePrepPanel() {
 
   const resume = $("prepResume");
   if (resume) resume.oninput = () => { state.prep.resume = resume.value; };
+  const skipResume = $("prepSkipResume");
+  if (skipResume) skipResume.onclick = () => {
+    // 再点一次取消跳过: 误触之后不应该只能靠"其实填了内容"来解套。
+    state.prep.resumeSkipped = !state.prep.resumeSkipped;
+    renderPrep();
+  };
 
   const ckRecord = $("ckRecord");
   if (ckRecord) ckRecord.onchange = () => { state.prep.consentRecording = ckRecord.checked; };
@@ -344,7 +424,9 @@ function wirePrepPanel() {
   const micTest = $("btnMicTest");
   if (micTest) micTest.onclick = testMicrophone;
 
-  if (PREP_STEPS[state.prep.step][0] === "device") refreshDeviceList();
+  // 设备枚举不需要权限弹窗, 进这一步就直接跑, 别让人先点一次按钮才知道结果。
+  // 需要授权的是"测试麦克风", 那个仍然必须由用户主动点击。
+  if (PREP_STEPS[state.prep.step][0] === "device") detectDevices();
 }
 
 // detectDevices 只枚举设备, 不申请权限 —— 枚举在未授权时也能拿到设备数量,
@@ -366,17 +448,12 @@ async function detectDevices() {
       videoinput: devices.filter((d) => d.kind === "videoinput").length,
     };
     state.prep.deviceChecked = true;
-    hint.textContent = "设备枚举完成。正式面试仍以键盘作答，麦克风采集尚未接入。";
+    hint.textContent = "设备枚举完成。语音作答用浏览器自带的识别与合成（Chrome/Edge），无需额外密钥。";
     renderDeviceList(kinds, true);
+    refreshPrepProgressUI();
   } catch (err) {
     hint.textContent = "设备枚举失败：" + (err.message || err);
   }
-}
-
-function refreshDeviceList() {
-  const list = $("deviceList");
-  if (!list) return;
-  list.innerHTML = `<li><span>设备状态</span><b>点击「检测设备」开始</b></li>`;
 }
 
 function renderDeviceList(kinds, ok) {
@@ -518,6 +595,9 @@ async function startInterview() {
         company: p.company,
         position: p.position,
         interviewer_name: p.interviewer,
+        // 简历随会话一起提交: 服务端会做结构化解析(带原文偏移),
+        // 之后追问命中简历里的要点时会直接引用简历原话。
+        resume_text: state.prep.resume || "",
         consent_recording: state.prep.consentRecording,
       }),
     });
@@ -1050,8 +1130,10 @@ function bind() {
   });
 
   $("btnContinuePrep").onclick = () => {
-    if (prepCompletedSteps() >= 5) { startInterview(); return; }
-    state.prep.step = Math.max(0, prepCompletedSteps() - 1);
+    // 进入准备流程即视为"看过面试概览", 这样两个页面的进度从一开始就一致。
+    state.prep.overviewSeen = true;
+    if (prepProgress().done === prepProgress().total) { startInterview(); return; }
+    state.prep.step = firstPendingStep();
     renderPrep();
     showView("prep");
   };
