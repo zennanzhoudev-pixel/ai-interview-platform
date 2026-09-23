@@ -402,14 +402,17 @@ type Dimension struct {
 
 // Stats 是质量观测指标, 直接对接 Prometheus 与一致性看板。
 type Stats struct {
-	Turns            int     `json:"turns"`
-	ScoredTurns      int     `json:"scored_turns"`
-	Probes           int     `json:"probes"`
-	Disagreements    int     `json:"disagreements"`
-	Arbitrations     int     `json:"arbitrations"`
-	HumanReviewItems int     `json:"human_review_items"`
-	MaxProbeDepth    int     `json:"max_probe_depth"`
-	AvgConfidence    float64 `json:"avg_confidence"`
+	Turns            int `json:"turns"`
+	ScoredTurns      int `json:"scored_turns"`
+	Probes           int `json:"probes"`
+	Disagreements    int `json:"disagreements"`
+	Arbitrations     int `json:"arbitrations"`
+	HumanReviewItems int `json:"human_review_items"`
+	// Degraded 统计有多少条评分来自备用评分器(通常是规则评分器)。
+	// 这个数字出现在每份报告里, 是"评分标准有没有悄悄变化"的报警器。
+	Degraded      int     `json:"degraded_scores"`
+	MaxProbeDepth int     `json:"max_probe_depth"`
+	AvgConfidence float64 `json:"avg_confidence"`
 }
 
 // Report 是面试评估报告, 对应库表 report。
@@ -470,6 +473,9 @@ func (e *Engine) Report() Report {
 		}
 		if v.NeedsHumanReview {
 			rep.Stats.HumanReviewItems++
+		}
+		if v.Final.DegradedFrom != "" {
+			rep.Stats.Degraded++
 		}
 		if t.Competency == "" {
 			continue
@@ -570,6 +576,11 @@ func buildFlags(rep Report) []string {
 		flags = append(flags, fmt.Sprintf(
 			"ARBITRATED: %d 条评分触发了三方仲裁, 建议面试官优先复核",
 			rep.Stats.Arbitrations))
+	}
+	if rep.Stats.Degraded > 0 {
+		flags = append(flags, fmt.Sprintf(
+			"DEGRADED_SCORING: %d 条评分由备用评分器(规则匹配)产出, 结论可信度低于大模型评分",
+			rep.Stats.Degraded))
 	}
 	if len(rep.Gaps) > 0 {
 		flags = append(flags, fmt.Sprintf(

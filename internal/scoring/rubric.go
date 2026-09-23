@@ -31,6 +31,23 @@ var levelNames = [...]string{
 	LevelExpert:     "L5 专家",
 }
 
+var levelLabels = [...]string{
+	LevelUnknown:    "未评分",
+	LevelNone:       "未掌握",
+	LevelAware:      "了解",
+	LevelProficient: "熟练",
+	LevelAdvanced:   "精通",
+	LevelExpert:     "专家",
+}
+
+// Label 返回等级的中文名(不含 L 编号), 用于注入评分 prompt。
+func (l Level) Label() string {
+	if l < 0 || int(l) >= len(levelLabels) {
+		return "未知"
+	}
+	return levelLabels[l]
+}
+
 // Number 返回 1..5 的展示序号, LevelUnknown 返回 0。
 func (l Level) Number() int {
 	if l <= LevelUnknown {
@@ -117,6 +134,9 @@ type Result struct {
 	Evidence   []Evidence `json:"evidence"`
 	Confidence float64    `json:"confidence"`
 	Rationale  string     `json:"rationale"`
+	// DegradedFrom 非空表示这条分数来自备用评分器, 内容记录降级原因。
+	// 降级必须是可见的: 悄悄降级会让整批面试的评分标准在无人察觉时改变。
+	DegradedFrom string `json:"degraded_from,omitempty"`
 }
 
 // Valid 判断该结果是否可采纳: 必须有等级且有证据。

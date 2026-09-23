@@ -69,13 +69,14 @@ func conservativeMerge(a, b Result, rationale string) Result {
 		conf = 0
 	}
 	out := Result{
-		Model:      a.Model + " + " + b.Model,
-		Matched:    union(a.Matched, b.Matched),
-		Missing:    union(a.Missing, b.Missing),
-		AntiHits:   union(a.AntiHits, b.AntiHits),
-		Evidence:   dedupEvidence(concatEvidence(a.Evidence, b.Evidence)),
-		Confidence: conf,
-		Rationale:  rationale,
+		Model:        a.Model + " + " + b.Model,
+		Matched:      union(a.Matched, b.Matched),
+		Missing:      union(a.Missing, b.Missing),
+		AntiHits:     union(a.AntiHits, b.AntiHits),
+		Evidence:     dedupEvidence(concatEvidence(a.Evidence, b.Evidence)),
+		Confidence:   conf,
+		Rationale:    rationale,
+		DegradedFrom: firstNonEmpty(a.DegradedFrom, b.DegradedFrom),
 	}
 	out.Level = level
 	return out.Enforce()
@@ -91,11 +92,12 @@ func arithmeticMedian(a, b, c Result) Result {
 	out := Result{
 		Model: fmt.Sprintf("arbitration(%s | %s | %s)",
 			a.Model, b.Model, c.Model),
-		Matched:    unionAll(a.Matched, b.Matched, c.Matched),
-		Missing:    unionAll(a.Missing, b.Missing, c.Missing),
-		AntiHits:   unionAll(a.AntiHits, b.AntiHits, c.AntiHits),
-		Evidence:   dedupEvidence(concatEvidence(a.Evidence, b.Evidence, c.Evidence)),
-		Confidence: math.Min(math.Min(a.Confidence, b.Confidence), c.Confidence),
+		Matched:      unionAll(a.Matched, b.Matched, c.Matched),
+		Missing:      unionAll(a.Missing, b.Missing, c.Missing),
+		AntiHits:     unionAll(a.AntiHits, b.AntiHits, c.AntiHits),
+		Evidence:     dedupEvidence(concatEvidence(a.Evidence, b.Evidence, c.Evidence)),
+		Confidence:   math.Min(math.Min(a.Confidence, b.Confidence), c.Confidence),
+		DegradedFrom: firstNonEmpty(a.DegradedFrom, b.DegradedFrom, c.DegradedFrom),
 		Rationale: fmt.Sprintf("双模型分歧 %d 级, 仲裁模型取中位数 %s",
 			absInt(a.Number()-b.Number()), mid.Level),
 	}
@@ -187,4 +189,14 @@ func absInt(v int) int {
 		return -v
 	}
 	return v
+}
+
+// firstNonEmpty 返回第一个非空字符串。
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

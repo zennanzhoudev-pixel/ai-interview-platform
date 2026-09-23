@@ -207,6 +207,9 @@ func TestBargeInCancelsTTSAndKeepsOnlyHeardText(t *testing.T) {
 		t.Fatal("打断后 Speak 没有及时退出")
 	}
 
+	// 事件先经过内部队列再由事件泵投递, 因此必须等它真的送达,
+	// 而不是在 Speak 返回后立刻断言 —— 那是测试竞态, 不是产品行为。
+	col.waitFor(t, EvInterrupted, 1, 2*time.Second)
 	ev, ok := col.find(EvInterrupted)
 	if !ok {
 		t.Fatal("应产生 interrupted 事件")
