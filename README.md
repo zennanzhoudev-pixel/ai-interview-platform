@@ -100,6 +100,43 @@ make serve        # http://localhost:8080
 > curl -s localhost:8101/ | grep -c "/js/app.js"   # 输出 1 = 新版; 0 = 旧版
 > ```
 
+### 3.3 让服务在后台常驻(推荐)
+
+在终端里直接 `./bin/interviewd -serve :8101` 是**前台**运行: 关掉那个终端窗口、
+或者顺手 Ctrl+C, 服务就没了 —— 而浏览器里的表现是"页面突然打不开",
+很容易被误判成代码有问题。
+
+```bash
+make up        # 后台启动(默认 8101), 关掉终端也不会掉; 会自动等它就绪
+make status    # 看是否在跑, 以及"服务端给的是新前端还是旧前端"
+make logs      # 跟踪日志(Ctrl+C 只退出查看, 不停服务)
+make down      # 停止, 并顺手清理残留的旧版进程
+```
+
+### 3.4 浏览器打不开时的排查顺序
+
+按这个顺序走, 三步之内一定能定位:
+
+```bash
+make status
+# 1) 状态是"未运行" -> 服务没起来: make up
+# 2) 前端版本是"旧版"  -> 二进制没换: make restart
+# 3) 一切正常但仍白屏  -> 浏览器缓存了旧页面: 硬刷新
+#                           Mac: Cmd+Shift+R / Windows: Ctrl+F5
+#                           (或开发者工具里勾选 Disable cache 后刷新)
+```
+
+第 3 条曾经真实发生过: 旧版前端的入口是 `/app.js`, 新版改成了模块化入口
+`/js/app.js`。如果浏览器缓存着旧 HTML, 它会去请求一个在新版本里已经不存在的
+文件 —— 整页白屏, 而且怎么刷都不恢复, 因为浏览器压根没再向服务端要 HTML。
+
+为此服务端已经做了两件事(见 `internal/api/static.go`):
+
+- 入口 HTML 用 `Cache-Control: no-store`, 不允许任何中间层缓存;
+- 其余静态资源带**由整份内嵌资源算出的 ETag** + `no-cache`, 每次刷新只做一次
+  条件请求: 没改动命中 304(几十字节), 改动过立刻拿到新文件。任何一次重新构建
+  都会改变 ETag, 因此"代码变了"和"浏览器知道代码变了"是同一件事。
+
 打开 `http://localhost:8080` 后:
 
 1. **产品介绍** 是完整的产品说明(流程、RAG、评分、视频、边界)。
@@ -110,7 +147,7 @@ make serve        # http://localhost:8080
 4. 面试结束后自动生成报告: 分数、能力维度、逐条原话证据、简历原文定位、打印/导出。
 5. 报告与管道数据会回到工作台的 **报告** 与 **管道** 页。
 
-### 3.3 起完整依赖(MySQL / Redis / 录制存储 / Jaeger / Prometheus / Grafana)
+### 3.5 起完整依赖(MySQL / Redis / 录制存储 / Jaeger / Prometheus / Grafana)
 
 ```bash
 make docker-up    # 包含 interviewd 本体

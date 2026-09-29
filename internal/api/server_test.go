@@ -165,17 +165,22 @@ func TestCreateSessionValidatesRound(t *testing.T) {
 }
 
 func TestStaticFrontendIsServed(t *testing.T) {
-	ts, _ := newTestServer(t)
-	resp, err := http.Get(ts.URL + "/")
-	if err != nil {
-		t.Fatalf("获取首页失败: %v", err)
+	// 用处理器直调而不是起真实服务: 这条用例只关心"首页有没有被正确返回",
+	// 而不少受限环境不允许绑定端口 —— 那类环境里, 一个跟 socket 无关的
+	// 用例不该跟着一起失败。
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	NewServer(Config{Store: store.NewMemoryStore()}).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("首页应返回 200, 实际 %d", rec.Code)
 	}
-	defer resp.Body.Close()
-
-	buf := new(bytes.Buffer)
-	_, _ = buf.ReadFrom(resp.Body)
-	if !strings.Contains(buf.String(), "AI Interview OS") {
+	if !strings.Contains(rec.Body.String(), "AI Interview OS") {
 		t.Fatal("首页应返回面试前端页面")
+	}
+	// 新前端的入口必须是模块化版本; 旧版入口是单个 /app.js,
+	// 而那个文件在新构建里已经不存在 —— 浏览器缓存住旧 HTML 就是白屏。
+	if !strings.Contains(rec.Body.String(), "/js/app.js") {
+		t.Fatal("首页应引用模块化前端入口 /js/app.js")
 	}
 }
 

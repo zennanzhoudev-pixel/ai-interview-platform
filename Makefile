@@ -1,4 +1,4 @@
-.PHONY: help run serve restart restart-clean ps-check selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
+.PHONY: help run serve restart restart-clean up down status logs ps-check selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
 
 GO ?= go
 BIN := bin/interviewd
@@ -17,6 +17,18 @@ restart: ## 把本机 8101 上的旧进程换成当前代码构建的新版(改�
 
 restart-clean: ## 同上, 并先清掉所有别的端口上的残留 interviewd 进程
 	./scripts/restart-local.sh 8101 --clean-all
+
+up: build ## 后台常驻启动(默认 8101), 关掉终端也不会掉
+	./scripts/server.sh start 8101
+
+down: ## 停止后台服务, 并清理残留的旧版进程
+	./scripts/server.sh stop
+
+status: ## 查看服务状态: 是否在跑、给的是新前端还是旧前端
+	./scripts/server.sh status 8101
+
+logs: ## 跟踪服务日志(Ctrl+C 只退出查看, 不停服务)
+	./scripts/server.sh logs
 
 selftest: ## 联调自检: 探测已配置的 LLM / ASR / TTS / Embedding 是否真的可用
 	$(GO) run ./cmd/interviewd -selftest

@@ -25,7 +25,6 @@ import (
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/sandbox"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
-	"github.com/zennanzhoudev-pixel/ai-interview-platform/web"
 )
 
 // Scorers 是一组用于交叉评分的评分器。
@@ -284,7 +283,9 @@ func (s *Server) routes() {
 
 	// 静态资源挂在根路径。Go 1.22 的 ServeMux 优先匹配更具体的模式,
 	// 所以 /api 与 /ws 不会被这里吞掉。
-	s.mux.Handle("/", http.FileServer(http.FS(web.FS)))
+	// 走 StaticHandler 而不是裸 FileServer: 内嵌前端必须带 ETag 与
+	// 强制重校验, 否则浏览器会拿旧 HTML 去请求已经不存在的旧资源名。
+	s.mux.Handle("/", StaticHandler())
 }
 
 // storeCtx 给单次存储操作套上超时。
