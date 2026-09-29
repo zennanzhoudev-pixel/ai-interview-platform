@@ -198,24 +198,33 @@ func (m *LocalMatcher) Embed(img image.Image) ([]float32, float64, error) {
 		return nil, 0, fmt.Errorf("%w: 分辨率过低(至少 %dx%d, 实际 %dx%d)",
 			ErrFaceLowQuality, minFaceSidePixels, minFaceSidePixels, bounds.Dx(), bounds.Dy())
 	}
+	// 先找人脸区域, 再对这块区域做归一化采样。
+	//
+	// 这一步是"识别不到人脸"的根因所在: 直接对整张画面降采样时, 模板里
+	// 混进了墙、桌子与头发, 于是"人往前坐了一点""背景换了个角度"都会让
+	// 相似度崩掉。真实的人脸系统第一步都是检测 + 对齐, 再嵌入特征 ——
+	// 这里用同样的思路: 找到画面里"结构最丰富"的那一块(人脸),
+	// 裁出来再比。它不提升"是不是同一个人"的判别力, 但能消掉绝大多数
+	// 与身份无关的差异。
+	crop := detectFaceRegion(img)
 
 	// 采样: 每个目标像素在源图对应位置读一小块(faceSampleBlock×faceSampleBlock)
 	// 并取均值。用"点采样 + 小块平均"而不是"整块平均", 是为了保住细节 ——
 	// 否则不同的人也会因为细节被抹平而算出极高的相似度。
 	gray := make([]float64, faceEmbeddingSide*faceEmbeddingSide)
-	stepX := float64(bounds.Dx()) / faceEmbeddingSide
-	stepY := float64(bounds.Dy()) / faceEmbeddingSide
+	stepX := float64(crop.Dx()) / faceEmbeddingSide
+	stepY := float64(crop.Dy()) / faceEmbeddingSide
 	for gy := 0; gy < faceEmbeddingSide; gy++ {
 		for gx := 0; gx < faceEmbeddingSide; gx++ {
-			x0 := bounds.Min.X + int(float64(gx)*stepX)
-			y0 := bounds.Min.Y + int(float64(gy)*stepY)
+			x0 := crop.Min.X + int(float64(gx)*stepX)
+			y0 := crop.Min.Y + int(float64(gy)*stepY)
 			x1 := x0 + faceSampleBlock
 			y1 := y0 + faceSampleBlock
-			if x1 > bounds.Max.X {
-				x1 = bounds.Max.X
+			if x1 > crop.Max.X {
+				x1 = crop.Max.X
 			}
-			if y1 > bounds.Max.Y {
-				y1 = bounds.Max.Y
+			if y1 > crop.Max.Y {
+				y1 = crop.Max.Y
 			}
 			var sum, count float64
 			for y := y0; y < y1; y++ {
@@ -360,6 +369,22 @@ func PackSamples(samples [][]float32) (flat []float32, dim, count int) {
 	return flat, dim, count
 }
 
+// DefaultThresholdFor 返回某个匹配器的建议阈值。
+//
+// 把这件事写成函数而不是常量, 是因为"阈值"不是匹配器的属性, 而是
+// "匹配器 + 场景"的属性: 换一个匹配器就必须重新选阈值, 否则会出现
+// "装了真模型反而永远登不上"(0.95 对 ArcFace 太高)这种反直觉故障。
+func DefaultThresholdFor(m Matcher) float64 {
+	if m == nil {
+		return defaultFaceMatchThreshold
+	}
+	if _, ok := m.(*HTTPMatcher); ok {
+		// 真实模型的特征区分度远高于图像相似度, 0.6 是这类模型的常用量级。
+		return 0.60
+	}
+	return defaultFaceMatchThreshold
+}
+
 // maxShift 是匹配时允许的网格平移量(格)。
 //
 // 48 格的网格覆盖整张画面, 因此 2 格大约相当于画面宽度的 4% ——
@@ -426,6 +451,153 @@ func shiftedCosine(sample, candidate []float32, side, dx, dy int) float64 {
 		return 1
 	}
 	return score
+}
+
+// detectFaceRegion 估计画面里人脸所在的方形区域。
+//
+// 用"结构最丰富的一块"作为人脸的近似: 把画面切成网格, 逐格算灰度方差,
+// 取高于阈值的格子, 求它们的重心与边界 —— 人脸(眼睛、鼻、嘴、发际线)
+// 始终是整张画面里变化最剧烈的一块, 而墙、桌面、天空几乎是平的。
+//
+// 这不是人脸检测器, 它没有办法区分"人脸"和"一张海报上的图案"; 它的目的
+// 只是**把构图差异从比对里剔除**。真正的人脸检测与对齐应当来自模型
+// (实现 Matcher 接口即可接入云端或本地 SDK), 这里是把"整张画面直接比对"
+// 这个明显错误的做法先纠正过来。
+//
+// 找不到足够结构时退回中心裁剪: 宁可退化成"居中", 也不要拿整张画面去比。
+func detectFaceRegion(img image.Image) image.Rectangle {
+	bounds := img.Bounds()
+	const cells = 12
+	cw := float64(bounds.Dx()) / cells
+	ch := float64(bounds.Dy()) / cells
+
+	type cell struct {
+		mean float64
+		varn float64
+	}
+	grid := make([]cell, cells*cells)
+	for cy := 0; cy < cells; cy++ {
+		for cx := 0; cx < cells; cx++ {
+			x0 := bounds.Min.X + int(float64(cx)*cw)
+			x1 := bounds.Min.X + int(float64(cx+1)*cw)
+			y0 := bounds.Min.Y + int(float64(cy)*ch)
+			y1 := bounds.Min.Y + int(float64(cy+1)*ch)
+			if x1 <= x0 || y1 <= y0 {
+				continue
+			}
+			var sum, sumSq, n float64
+			for y := y0; y < y1; y++ {
+				for x := x0; x < x1; x++ {
+					r, g, b, _ := img.At(x, y).RGBA()
+					v := 0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8)
+					sum += v
+					sumSq += v * v
+					n++
+				}
+			}
+			if n == 0 {
+				continue
+			}
+			mean := sum / n
+			grid[cy*cells+cx] = cell{mean: mean, varn: sumSq/n - mean*mean}
+		}
+	}
+
+	// 阈值取所有格子方差的均值: 它自动适应不同画面(纯白墙 vs 书架背景),
+	// 而写死一个数值会在过亮/过暗的画面里失效。
+	var vsum float64
+	for _, c := range grid {
+		vsum += c.varn
+	}
+	avgVar := vsum / float64(len(grid))
+	threshold := avgVar
+
+	var weight, wsumX, wsumY float64
+	minX, minY := cells, cells
+	maxX, maxY := -1, -1
+	for cy := 0; cy < cells; cy++ {
+		for cx := 0; cx < cells; cx++ {
+			c := grid[cy*cells+cx]
+			if c.varn < threshold {
+				continue
+			}
+			w := c.varn
+			weight += w
+			wsumX += w * (float64(cx) + 0.5)
+			wsumY += w * (float64(cy) + 0.5)
+			if cx < minX {
+				minX = cx
+			}
+			if cy < minY {
+				minY = cy
+			}
+			if cx > maxX {
+				maxX = cx
+			}
+			if cy > maxY {
+				maxY = cy
+			}
+		}
+	}
+	if weight == 0 || maxX < 0 {
+		return centerCrop(bounds)
+	}
+
+	// 以重心为中心取一个正方形: 边长取"高方差区域的跨度"与画面尺寸的折中,
+	// 既保证把整张脸框进去, 也不会把大半张画面当成脸。
+	cx := wsumX / weight * cw
+	cy := wsumY / weight * ch
+	spanX := float64(maxX-minX+1) * cw
+	spanY := float64(maxY-minY+1) * ch
+	side := math.Max(spanX, spanY) * 1.15
+	minSide := math.Min(float64(bounds.Dx()), float64(bounds.Dy())) * 0.35
+	maxSide := math.Min(float64(bounds.Dx()), float64(bounds.Dy())) * 0.95
+	if side < minSide {
+		side = minSide
+	}
+	if side > maxSide {
+		side = maxSide
+	}
+
+	x := bounds.Min.X + int(cx-side/2)
+	y := bounds.Min.Y + int(cy-side/2)
+	return clampSquare(bounds, x, y, int(side))
+}
+
+// centerCrop 返回画面中央的正方形区域(占短边的 70%)。
+func centerCrop(bounds image.Rectangle) image.Rectangle {
+	side := int(math.Min(float64(bounds.Dx()), float64(bounds.Dy())) * 0.7)
+	x := bounds.Min.X + (bounds.Dx()-side)/2
+	y := bounds.Min.Y + (bounds.Dy()-side)/2
+	return clampSquare(bounds, x, y, side)
+}
+
+// clampSquare 把正方形区域夹回画面内。
+func clampSquare(bounds image.Rectangle, x, y, side int) image.Rectangle {
+	if side <= 0 {
+		return bounds
+	}
+	if x < bounds.Min.X {
+		x = bounds.Min.X
+	}
+	if y < bounds.Min.Y {
+		y = bounds.Min.Y
+	}
+	if x+side > bounds.Max.X {
+		x = bounds.Max.X - side
+	}
+	if y+side > bounds.Max.Y {
+		y = bounds.Max.Y - side
+	}
+	if x < bounds.Min.X {
+		x = bounds.Min.X
+		side = bounds.Dx()
+	}
+	if y < bounds.Min.Y {
+		y = bounds.Min.Y
+		side = bounds.Dy()
+	}
+	return image.Rect(x, y, x+side, y+side)
 }
 
 // AverageTemplates 把多帧模板平均成一个(再归一化)。

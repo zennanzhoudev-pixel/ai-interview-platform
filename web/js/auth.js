@@ -321,8 +321,16 @@ export function renderProfile(root) {
       el('p', {
         class: 'muted small',
         text: matcher.note
-          || '它是图像相似度匹配, 会受光线与姿态影响, 也挡不住用照片冒充; 生产环境请接入云厂商人脸 API 或本地 SDK。',
+          || '它是图像相似度匹配, 会受光线与姿态影响, 也挡不住用照片冒充。',
       }),
+      (matcher.assurance || '').startsWith('development-only')
+        ? el('p', {
+            class: 'muted small',
+            text: '想让识别接近 Face ID 的体验, 请用 FACE_MATCHER=http 接入真实人脸模型服务'
+              + '(约定见 README: POST /embed 返回特征向量即可)。浏览器没有深度摄像头, '
+              + '本地实现再怎么调参也到不了那个水平 —— 这是硬件差异, 不是配置问题。',
+          })
+        : null,
     ]),
     me.account_storage === 'memory'
       ? el('div', { class: 'callout warn' }, [

@@ -70,8 +70,11 @@ func main() {
 		"面试录制件保留天数, 到期后由清理任务删除")
 	adminInvite := flag.String("admin-invite-code", os.Getenv("ADMIN_INVITE_CODE"),
 		"企业成员(管理员/面试官)注册邀请码; 留空表示只能由管理员在后台创建账号")
-	faceThreshold := flag.Float64("face-threshold", envFloat("FACE_THRESHOLD", 0.95),
-		"人脸 1:1 比对通过阈值(0-1); 本地匹配器建议保持在安全侧, 详见 README 的实测数据")
+	faceThreshold := flag.Float64("face-threshold", envFloat("FACE_THRESHOLD", 0),
+		"人脸 1:1 比对通过阈值(0-1); 留空则按匹配器自动选择(本地 0.95 / 模型服务 0.60)")
+	faceMatcher := flag.String("face-matcher", defaultEnv("FACE_MATCHER", "local"), "人脸匹配器: local(开发级图像相似度) 或 http(对接真实人脸模型服务)")
+	faceMatcherURL := flag.String("face-matcher-url", os.Getenv("FACE_MATCHER_URL"), "人脸模型服务地址(face-matcher=http 时必填), 约定见 README")
+	faceMatcherKey := flag.String("face-matcher-key", os.Getenv("FACE_MATCHER_API_KEY"), "人脸模型服务 API Key")
 	faceLogin := flag.Bool("face-login", defaultEnv("FACE_LOGIN", "on") != "off",
 		"是否允许人脸登录(需要先在个人中心录入)")
 	healthcheck := flag.String("healthcheck", "",
@@ -103,6 +106,7 @@ func main() {
 			recordingDir: *recordingDir, sandboxEngine: *sandboxEngine,
 			iceServers: *iceServers, retentionDays: *retentionDays,
 			adminInvite: *adminInvite, faceLogin: *faceLogin, faceThreshold: *faceThreshold,
+			faceMatcher: *faceMatcher, faceMatcherURL: *faceMatcherURL, faceMatcherKey: *faceMatcherKey,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
 			os.Exit(1)
@@ -378,22 +382,25 @@ func runHealthcheck(rawURL string) {
 /* ---------------- Web 服务 ---------------- */
 
 type serverOptions struct {
-	addr          string
-	mysqlDSN      string
-	redisAddr     string
-	requireAuth   bool
-	appSecret     string
-	tenantID      string
-	otlpEndpoint  string
-	logLevel      string
-	logFormat     string
-	recordingDir  string
-	sandboxEngine string
-	iceServers    string
-	retentionDays int
-	adminInvite   string
-	faceLogin     bool
-	faceThreshold float64
+	addr           string
+	mysqlDSN       string
+	redisAddr      string
+	requireAuth    bool
+	appSecret      string
+	tenantID       string
+	otlpEndpoint   string
+	logLevel       string
+	logFormat      string
+	recordingDir   string
+	sandboxEngine  string
+	iceServers     string
+	retentionDays  int
+	adminInvite    string
+	faceLogin      bool
+	faceThreshold  float64
+	faceMatcher    string
+	faceMatcherURL string
+	faceMatcherKey string
 }
 
 // envFloat 读取浮点环境变量, 非法或缺失时用默认值。
@@ -646,7 +653,7 @@ func openAccountService(
 		}
 	}
 
-	matcher := account.Matcher(account.NewLocalMatcher())
+	matcher := buildFaceMatcher(opts, logger)
 	if !opts.faceLogin {
 		logger.Info("人脸登录已关闭(-face-login=off): 仍可用密码登录")
 	}
@@ -664,11 +671,29 @@ func openAccountService(
 		slog.String("matcher", fmt.Sprint(info["name"])),
 		slog.String("assurance", fmt.Sprint(info["assurance"])),
 		slog.Float64("threshold", toFloat(info["threshold"])))
-	if fmt.Sprint(info["assurance"]) != "certified" {
-		logger.Warn("当前人脸能力是开发级(图像相似度), 不是认证级人脸识别; " +
-			"生产请接入云厂商人脸 API 或本地 SDK(实现 account.Matcher 即可)")
+	if fmt.Sprint(info["assurance"]) == "development-only" {
+		logger.Warn("人脸能力目前是开发级(本地图像相似度): 挡得住明显不同的人, 但挡不住照片, " +
+			"且换个姿势就可能失败。要接近 Face ID 的体验, 请用 -face-matcher=http 接入真实人脸模型服务")
 	}
 	return svc
+}
+
+// buildFaceMatcher 选择人脸匹配器。
+//
+// 默认是本地实现(零依赖可跑), 但只要配置了模型服务地址就切换到远程实现 ——
+// 这是唯一能接近 Face ID 体验的路径: 特征来自训练好的模型, 而不是
+// 48x48 的灰度图像相似度。
+func buildFaceMatcher(opts serverOptions, logger *slog.Logger) account.Matcher {
+	if strings.EqualFold(strings.TrimSpace(opts.faceMatcher), "http") {
+		if strings.TrimSpace(opts.faceMatcherURL) == "" {
+			logger.Error("已选择 http 人脸匹配器但未提供地址(-face-matcher-url), 回退到本地匹配器")
+			return account.NewLocalMatcher()
+		}
+		logger.Info("人脸匹配器: 远程模型服务",
+			slog.String("url", opts.faceMatcherURL), slog.Bool("has_key", opts.faceMatcherKey != ""))
+		return account.NewHTTPMatcher(opts.faceMatcherURL, opts.faceMatcherKey, os.Getenv("FACE_MATCHER_MODEL"))
+	}
+	return account.NewLocalMatcher()
 }
 
 func toFloat(v any) float64 {

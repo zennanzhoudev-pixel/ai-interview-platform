@@ -521,6 +521,13 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
 .device-grid { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; margin: 12px 0; }
 .preview { width: 100%; border-radius: var(--radius-sm); background: #0b0b0c; aspect-ratio: 4 / 3; object-fit: cover; }
 .preview.remote { border: 2px solid var(--accent); }
+/* 自视画面做水平镜像。
+   人在镜头里看到自己时, 期待的是"照镜子"的样子 —— 抬手时画面里的手往同
+   一侧移动。不镜像会让你觉得"我这边怎么反着动", 抬手都觉得别扭。
+   远端画面**绝不镜像**: 那会把对方变成镜像人, 而且左右会真的反过来。
+   (镜像只是显示层的 transform, 不影响采集到的像素, 因此人脸比对的
+   输入在注册与登录两条路径上仍然一致。) */
+.self-card .preview, .face-capture .preview { transform: scaleX(-1); }
 .self-card.video { position: relative; }
 .badge {
   position: absolute; left: 10px; top: 10px; background: rgba(0,0,0,.6); color: #fff;

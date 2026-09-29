@@ -74,7 +74,13 @@ func New(cfg Config) *Service {
 		cfg.Now = time.Now
 	}
 	if cfg.FaceThreshold <= 0 || cfg.FaceThreshold > 1 {
-		cfg.FaceThreshold = defaultFaceMatchThreshold
+		// 阈值必须跟着匹配器走, 不能用一个全局常量。
+		//
+		// 本地图像相似度: 同一个人姿态不变约 1.00, 换个姿势约 0.75,
+		// 最像的"别人"约 0.91 —— 只能取安全侧的 0.95;
+		// 真实人脸模型(ArcFace 类): 同一人余弦约 0.5-0.8, 不同人接近 0,
+		// 用 0.95 会永远不通过, 行业常用阈值在 0.6 上下。
+		cfg.FaceThreshold = DefaultThresholdFor(cfg.Matcher)
 	}
 	return &Service{
 		store:           cfg.Store,
