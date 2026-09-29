@@ -636,6 +636,84 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
    结果是"出错了"和普通说明文字长得一模一样, 用户根本注意不到。 */
 .error { color: #8c2f2f; }
 
+/* ---------- 候选人空间: 首页版式 ----------
+   之前这个页面只有一张卡和两个按钮, 空得像个未完成品。现在它是真正的
+   落地页: 顶部是"这是什么、我是谁", 下面依次是面试安排、流程、准备清单、
+   历史记录与价值说明。视觉上给足留白与层次, 但颜色仍然只用在状态上。 */
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px;
+  align-items: start; padding: 30px 34px; margin-bottom: 20px;
+  border: 1px solid var(--line); border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfaf7 100%);
+}
+.hero-text h1 { margin: 10px 0 14px; }
+.hero-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+
+.block {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 24px 26px; margin-bottom: 18px;
+}
+.block-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; margin-bottom: 18px;
+}
+.block-head h2 { font-size: 20px; }
+
+.flow-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.flow-step {
+  position: relative; display: grid; gap: 6px; padding: 18px 16px 16px;
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--bg);
+}
+.flow-index {
+  font-family: var(--serif); font-size: 13px; color: var(--accent);
+  letter-spacing: .08em;
+}
+.flow-step strong { font-size: 15px; }
+
+.task-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.task-list li { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--ink-2); }
+.task-list li.done { color: var(--ink); }
+.task-mark {
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--line); font-size: 12px; background: var(--surface);
+}
+.task-list li.done .task-mark { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
+.record-list { display: grid; gap: 10px; }
+.record-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 14px; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.record-row p { margin-top: 2px; }
+
+.value-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1px; background: var(--line); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden;
+}
+.value-item { background: var(--surface); padding: 22px 24px; }
+.value-index { color: var(--ink-3); font-size: 12px; letter-spacing: .08em; }
+.value-item h3 { font-size: 16px; margin: 8px 0 6px; }
+
+/* ---------- 整体观感 ----------
+   三处小调整, 效果比"换配色"明显得多: 卡片有轻微悬停反馈、
+    主按钮有极浅的投影、导航当前项有下划线而不是只靠字重。 */
+.card, .block { transition: box-shadow .18s ease, transform .18s ease; }
+.card:hover, .block:hover { box-shadow: 0 6px 24px rgba(20, 19, 19, .05); }
+.btn.primary { box-shadow: 0 1px 2px rgba(20, 19, 19, .18); }
+.btn:active { transform: translateY(1px); }
+.nav-link.is-active { position: relative; }
+.nav-link.is-active::after {
+  content: ""; position: absolute; left: 10px; right: 10px; bottom: -3px;
+  height: 2px; border-radius: 2px; background: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; }
+  .hero-side { flex-direction: row; align-items: center; }
+}
+
 @media (max-width: 900px) {
   .auth-shell { grid-template-columns: 1fr; gap: 24px; }
 }

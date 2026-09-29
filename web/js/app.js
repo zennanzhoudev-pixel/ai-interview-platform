@@ -111,12 +111,25 @@ function renderShell(path) {
   // 自己到底有没有登录成功。
   const user = currentUser();
   if (user) {
-    shell.append(
-      el('button', {
+    // 只有企业成员才提供"切换"按钮。
+    //
+    // 候选人看到"切换招聘工作台"与看到那个入口按钮是同一类错误: 他没有
+    // 这个权限, 点进去只会被挡回来。界面不该提供做不到的操作。
+    if (inConsole || inObserver) {
+      // 在工作台里: 企业账号可以切到候选人空间看看(它只是一次浏览)。
+      shell.append(el('button', {
         class: 'btn ghost small',
-        text: inConsole || inObserver ? '切换候选人空间' : '切换招聘工作台',
-        onclick: () => navigate(inConsole || inObserver ? '/candidate' : '/console/dashboard'),
-      }),
+        text: '切换候选人空间',
+        onclick: () => navigate('/candidate'),
+      }));
+    } else if (user.staff) {
+      shell.append(el('button', {
+        class: 'btn ghost small',
+        text: '切换招聘工作台',
+        onclick: () => navigate('/console/dashboard'),
+      }));
+    }
+    shell.append(
       el('button', { class: 'nav-link', text: '个人中心', onclick: () => navigate('/profile') }),
       el('button', { class: 'nav-link', text: '退出登录', onclick: () => logout() }),
     );

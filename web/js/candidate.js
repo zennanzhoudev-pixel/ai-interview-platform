@@ -6,6 +6,7 @@ import {
   el, clear, api, candidateApi, store, toast, navigate, confirmDialog,
   stageLabel, competencyLabel, fmtDuration, fmtDate,
 } from './core.js';
+import { currentUser } from './auth.js';
 import {
   openMedia, listDevices, mediaErrorMessage, MicCapture, PcmPlayer,
   InterviewRecorder, PeerLink, Proctor,
@@ -84,78 +85,226 @@ export async function loadSession({ force = false } = {}) {
 
 export function renderOverview(root) {
   clear(root);
-  if (!state.token) {
-    root.append(emptyState());
-    return;
-  }
-  root.append(el('div', { class: 'view-head' }, [
-    el('div', {}, [
-      el('p', { class: 'eyebrow', text: '候选人空间' }),
-      el('h1', { class: 'display', text: greeting() }),
-      el('p', { class: 'lede', text: '正在加载这场面试的信息…' }),
+  const user = currentUser();
+  const account = user && user.user ? user.user : null;
+  const displayName = (account && account.name) || (state.info && state.info.candidate_name) || '';
+
+  root.append(
+    el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-text' }, [
+        el('p', { class: 'eyebrow', text: '候选人空间' }),
+        el('h1', { class: 'display', text: displayName ? `${displayName}, 你好。` : greeting() }),
+        el('p', {
+          class: 'lede',
+          text: '这里是你自己的面试空间: 面试安排、准备清单、历史记录与报告都在这里。'
+            + '企业招聘的其他内容(职位、候选人、题库)与你无关, 也不会出现在这里。',
+        }),
+      ]),
+      el('div', { class: 'hero-side' }, [
+        el('span', { class: `pill ${state.token ? 'ok' : 'neutral'}`, text: state.token ? '本场链接已验证' : '尚未进入面试' }),
+        user
+          ? el('span', { class: 'pill mint', text: '账号已登录' })
+          : el('span', { class: 'pill neutral', text: '未登录' }),
+      ]),
     ]),
-    el('span', { class: 'pill ok' }, [el('i'), '链接已验证']),
-  ]));
+  );
 
-  const card = el('article', { class: 'card' });
-  root.append(card);
+  const sessionCard = el('article', { class: 'card' });
+  root.append(sessionCard);
 
-  loadSession().then((info) => {
-    clear(card);
-    const progress = prepProgress();
-    card.append(
-      el('span', { class: 'pill mint', text: info.status === 'finished' ? '已完成' : '待开始' }),
-      el('div', { class: 'card-head' }, [
-        el('span', { class: 'avatar-square', text: initials(info.company) }),
-        el('div', {}, [
-          el('h2', { text: info.position || '面试' }),
-          el('p', { class: 'muted' }, [
-            `${info.company || ''} · ${info.round_name || `第 ${info.round} 轮`}`,
-            modeBadge(info.mode),
-          ]),
-        ]),
-      ]),
-      el('dl', { class: 'facts' }, [
-        fact('预计时长', `${info.minutes || 45} 分钟`),
-        fact('AI 面试官', info.interviewer_name || 'AI'),
-        fact('面试形式', modeLabel(info.mode)),
-        fact('真人面试官', info.human_panel ? '本轮有真人参与' : '本轮为 AI 主持'),
-      ]),
-      progressRow(progress),
+  if (!state.token) {
+    clear(sessionCard);
+    sessionCard.append(
+      el('h2', { text: '还没有面试安排' }),
+      el('p', {
+        class: 'muted',
+        text: '面试链接由招聘方发给你, 链接里带有本场面试的凭证。'
+          + (user ? '你也可以先看看自己的历史面试记录。' : '注册账号后, 你的面试记录与报告会一直留在这里。'),
+      }),
       el('div', { class: 'actions' }, [
-        el('button', {
-          class: 'btn primary wide',
-          text: progress.pct >= 100 ? '进入面试间' : '继续准备',
-          onclick: () => navigate(progress.pct >= 100 ? '/candidate/room' : '/candidate/prep'),
-        }),
-        el('button', {
-          class: 'btn outline wide',
-          text: '查看报告',
-          onclick: () => navigate('/candidate/report'),
-        }),
+        user
+          ? el('button', { class: 'btn primary', text: '查看我的面试记录', onclick: () => navigate('/candidate/history') })
+          : el('button', { class: 'btn primary', text: '登录 / 注册账号', onclick: () => navigate('/login') }),
+        el('button', { class: 'btn outline', text: '产品介绍', onclick: () => navigate('/about') }),
       ]),
     );
-  }).catch((err) => {
-    clear(card);
-    card.append(el('p', { class: 'muted', text: err.message }));
-    card.append(el('div', { class: 'actions' }, [
-      el('button', { class: 'btn outline', text: '清除本地链接', onclick: () => { signOutCandidate(); navigate('/candidate'); } }),
-    ]));
+  } else {
+    clear(sessionCard);
+    sessionCard.append(el('p', { class: 'muted', text: '正在加载这场面试的信息…' }));
+    loadSession().then((info) => {
+      clear(sessionCard);
+      const progress = prepProgress();
+      sessionCard.append(
+        el('div', { class: 'card-head' }, [
+          el('span', { class: 'avatar-square', text: initials(info.company) }),
+          el('div', {}, [
+            el('h2', { text: info.position || '面试' }),
+            el('p', { class: 'muted' }, [
+              `${info.company || ''} · ${info.round_name || `第 ${info.round} 轮`}`,
+              modeBadge(info.mode),
+            ]),
+          ]),
+        ]),
+        el('dl', { class: 'facts' }, [
+          fact('预计时长', `${info.minutes || 45} 分钟`),
+          fact('AI 面试官', info.interviewer_name || 'AI'),
+          fact('面试形式', modeLabel(info.mode)),
+          fact('真人面试官', info.human_panel ? '本轮有真人参与' : '本轮为 AI 主持'),
+        ]),
+        progressRow(progress),
+        el('div', { class: 'actions' }, [
+          el('button', {
+            class: 'btn primary wide',
+            text: progress.pct >= 100 ? '进入面试间' : '继续准备',
+            onclick: () => navigate(progress.pct >= 100 ? '/candidate/room' : '/candidate/prep'),
+          }),
+          el('button', { class: 'btn outline wide', text: '查看报告', onclick: () => navigate('/candidate/report') }),
+        ]),
+      );
+    }).catch((err) => {
+      clear(sessionCard);
+      sessionCard.append(el('p', { class: 'muted', text: err.message }));
+    });
+  }
+
+  root.append(flowSection(), checklistSection(), historySection(), valueSection());
+}
+
+// flowSection 用四步说明这场面试会发生什么。
+//
+// 放在这里而不是让人再点一次跳转: 候选人在开始前最想知道的正是这件事,
+// 而"点一个按钮去看介绍"会把这一步推迟到他最紧张的时候。
+function flowSection() {
+  const steps = [
+    ['设备检查', '确认摄像头、麦克风与网络, 现场测试电平'],
+    ['数据授权', '录音与 AI 评分需要你本人同意, 会留痕可查'],
+    ['简历确认', '上传后 AI 围绕简历追问, 报告里能定位到原文'],
+      ['进入面试间', 'AI 提问、可语音作答、可随时打断'],
+  ];
+  return el('section', { class: 'block' }, [
+    el('div', { class: 'block-head' }, [
+      el('h2', { text: '这场面试怎么跑' }),
+      el('span', { class: 'muted small', text: '四步, 大约 5 分钟准备 + 45 分钟面试' }),
+    ]),
+    el('div', { class: 'flow-row' }, steps.map(([title, desc], i) => el('div', { class: 'flow-step' }, [
+      el('span', { class: 'flow-index', text: `0${i + 1}` }),
+      el('strong', { text: title }),
+      el('span', { class: 'muted small', text: desc }),
+    ]))),
+  ]);
+}
+
+// checklistSection 把"准备什么"摊开成清单。
+function checklistSection() {
+  const progress = prepProgress();
+  const labels = { device: '设备检查', consent: '数据授权', resume: '简历确认', environment: '环境确认' };
+  return el('section', { class: 'block' }, [
+    el('div', { class: 'block-head' }, [
+      el('h2', { text: '准备清单' }),
+      el('span', { class: 'muted small', text: state.token ? `已完成 ${progress.done} / ${progress.total}` : '拿到面试链接后开始' }),
+    ]),
+    el('ul', { class: 'task-list' }, progress.steps.map((item) => el('li', {
+      class: item.done ? 'done' : '',
+    }, [
+      el('span', { class: 'task-mark', text: item.done ? '✓' : '○' }),
+      el('span', { text: labels[item.key] || item.key }),
+    ]))),
+    state.token
+      ? el('div', { class: 'actions' }, [
+          el('button', { class: 'btn primary', text: '继续准备', onclick: () => navigate('/candidate/prep') }),
+        ])
+      : null,
+  ]);
+}
+
+// historySection 直接列出最近的面试记录。
+function historySection() {
+  const container = el('section', { class: 'block' });
+  const user = currentUser();
+  container.append(el('div', { class: 'block-head' }, [
+    el('h2', { text: '我的面试记录' }),
+    user ? el('button', { class: 'btn ghost small', text: '查看全部', onclick: () => navigate('/candidate/history') }) : null,
+  ]));
+  if (!user) {
+    container.append(el('p', {
+      class: 'muted small',
+      text: '注册账号后, 每次面试的记录与报告都会按时间留在这里, 随时可以回看。',
+    }));
+    return container;
+  }
+  const list = el('div', { class: 'record-list', text: '加载中…' });
+  container.append(list);
+  api.get('/api/v1/candidate/history').then((data) => {
+    clear(list);
+    const sessions = (data.sessions || []).slice(0, 4);
+    if (sessions.length === 0) {
+      list.append(el('p', { class: 'muted small', text: '还没有面试记录。完成一场面试后它会出现在这里。' }));
+      return;
+    }
+    sessions.forEach((item) => list.append(el('div', { class: 'record-row' }, [
+      el('div', {}, [
+        el('strong', { text: item.position || '面试' }),
+        el('p', { class: 'muted small', text: `${fmtDate(item.created_at)} · 第 ${item.round || 1} 轮` }),
+      ]),
+      el('span', {
+        class: `pill ${item.report_ready ? 'mint' : 'neutral'}`,
+        text: item.report_ready ? (item.score ? `${item.score} 分` : '报告可用') : '进行中',
+      }),
+    ])));
+  }).catch(() => {
+    clear(list);
+    list.append(el('p', { class: 'muted small', text: '暂时读不到历史记录。' }));
   });
+  return container;
+}
+
+function valueSection() {
+  const values = [
+    ['自适应追问', '沿着你回答里的缺口继续深入, 而不是按脚本念题。'],
+    ['全程透明', '阶段、时长、追问与评分来源在整个过程中都可见。'],
+    ['证据驱动', '每个判断都能回到你的原话, 报告可逐条复核。'],
+  ];
+  return el('section', { class: 'value-row' }, values.map(([title, desc], i) => el('div', { class: 'value-item' }, [
+    el('span', { class: 'value-index', text: `0${i + 1}` }),
+    el('h3', { text: title }),
+    el('p', { class: 'muted small', text: desc }),
+  ])));
 }
 
 function emptyState() {
+  // 候选人空间里**不能**出现"进入招聘工作台"。
+  //
+  // 这里曾经无条件放了那个按钮, 于是面试者会看到一个通往管理后台的入口 ——
+  // 既是逻辑错误(他没这个权限), 也是体验事故(会让人怀疑自己进错了系统)。
+  // 现在按角色分流: 候选人看到的是"怎么进来"和"进来之后能做什么";
+  // 只有企业成员才会看到工作台入口。
+  const user = currentUser();
+  if (user && user.staff) {
+    return el('section', { class: 'card narrow center' }, [
+      el('p', { class: 'eyebrow', text: '候选人空间' }),
+      el('h1', { class: 'display small', text: '你正在用企业账号浏览候选人空间。' }),
+      el('p', {
+        class: 'lede',
+        text: '企业账号没有属于自己的面试, 因此这里不会显示任何面试安排。'
+          + '要管理职位、候选人与报告, 请进入招聘工作台。',
+      }),
+      el('div', { class: 'actions' }, [
+        el('button', { class: 'btn primary', text: '进入招聘工作台', onclick: () => navigate('/console/dashboard') }),
+        el('button', { class: 'btn outline', text: '查看产品介绍', onclick: () => navigate('/about') }),
+      ]),
+    ]);
+  }
   return el('section', { class: 'card' }, [
     el('p', { class: 'eyebrow', text: '候选人空间' }),
-    el('h1', { class: 'display', text: '还没有面试链接。' }),
+    el('h1', { class: 'display', text: '这里是你自己的面试空间。' }),
     el('p', {
       class: 'lede',
-      text: '请使用招聘方发给你的面试链接进入(链接里带有本场面试的凭证)。'
-        + '如果你是企业面试官或招聘同学, 请从下方切换到工作台。',
+      text: '面试链接由招聘方发给你, 链接里带有本场面试的凭证。'
+        + '如果你已经注册过账号, 也可以直接登录查看历史与报告。',
     }),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn primary', text: '进入招聘工作台', onclick: () => navigate('/console/dashboard') }),
-      el('button', { class: 'btn outline', text: '了解这场面试怎么跑', onclick: () => document.getElementById('navAbout')?.click() }),
+      el('button', { class: 'btn primary', text: '登录 / 注册账号', onclick: () => navigate('/login') }),
+      el('button', { class: 'btn outline', text: '了解这场面试怎么跑', onclick: () => navigate('/about') }),
     ]),
   ]);
 }
