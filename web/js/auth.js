@@ -165,11 +165,12 @@ function renderRegister(body, root) {
     el('option', { value: 'scheduler', text: '我是系统集成账号' }),
   ]);
   const invite = el('input', { placeholder: '企业邀请码(仅企业成员需要)' });
-  const inviteRow = el('label', { hidden: true }, ['企业邀请码', invite]);
-  role.addEventListener('change', () => {
-    // 候选人不需要邀请码: 他们通常是拿着面试链接过来的。
-    inviteRow.hidden = role.value === 'candidate';
-  });
+  // 邀请码输入框**始终显示**。
+  //
+  // 之前它只在选中企业身份时才出现, 结果是"我明明记得有邀请码这一栏,
+  // 怎么没了?" —— 隐藏一栏比显示一栏多出来的那点空间, 不值得让人怀疑
+  // 功能被删掉了。这里改成常驻, 并用一句话说清什么时候需要它。
+  const inviteRow = el('label', {}, ['企业邀请码(选企业身份时必填, 候选人留空)', invite]);
   const status = el('p', { class: 'muted small' });
   const submit = async () => {
     status.textContent = '正在创建账号…';
@@ -201,6 +202,11 @@ function renderRegister(body, root) {
     ]),
     el('label', {}, ['密码', password]),
     inviteRow,
+    el('p', {
+      class: 'muted small',
+      text: '候选人不需要邀请码; 管理员/面试官/系统集成账号需要 —— 邀请码在服务启动时打印, '
+        + '也可以用 make status 查看。',
+    }),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn primary wide', text: '创建账号', onclick: submit }),
     ]),
@@ -261,16 +267,6 @@ function renderFaceLogin(body, root) {
   body.append(
     el('h2', { text: '人脸登录' }),
     el('label', {}, ['账号', identifier]),
-    me.account_storage === 'memory'
-      ? el('div', { class: 'callout warn' }, [
-          el('strong', { text: '当前账号存在内存里' }),
-          el('p', {
-            class: 'muted small',
-            text: '服务重启后账号与人脸模板都会消失(这也是"录入了却登不上"最常见的原因)。'
-              + '用 MYSQL_DSN 启动可以把账号持久化到数据库。',
-          }),
-        ])
-      : null,
     el('div', { class: 'face-capture' }, [video]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn primary', text: '开始刷脸', onclick: capture }),
