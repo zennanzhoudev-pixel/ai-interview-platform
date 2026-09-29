@@ -41,9 +41,50 @@ running_pid() {
   echo "$pid"
 }
 
+# service_pid 返回"当前确实在服务这个端口的进程"。
+#
+# 先信 pid 文件, 再退回到"谁在监听端口"。只看 pid 文件是不够的:
+# pid 文件被删掉、或者进程不是本脚本启动的(例如手工在终端里跑的、或者
+# 上一版工具启动的), 都会得到"未运行"的误判 —— 而端口明明被占着,
+# 浏览器连的也正是那个进程。
+service_pid() {
+  local pid
+  if pid="$(running_pid)"; then
+    echo "$pid"
+    return 0
+  fi
+  local listener
+  listener="$(lsof -nP -tiTCP:"${PORT:-8101}" -sTCP:LISTEN 2>/dev/null | head -1)"
+  [ -n "$listener" ] && echo "$listener"
+}
+
 # port_pids 返回占用端口的进程(可能有多个, 取全部)。
 port_pids() {
   lsof -nP -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null || true
+}
+
+# file_inode 取文件的 inode(macOS 与 Linux 的 stat 参数不同)。
+file_inode() {
+  stat -f "%i" "$1" 2>/dev/null || stat -c "%i" "$1" 2>/dev/null || echo ""
+}
+
+# running_inode 取"正在运行的进程实际持有的可执行文件 inode"。
+#
+# 为什么需要它: 前端被编进二进制, 而 `go build` 是"写新文件再改名覆盖"。
+# 于是重新构建之后, 磁盘上的 inode 变了, 而**已经在跑的进程还握着旧 inode** ——
+# 它继续提供旧的前端, 你在浏览器里怎么刷新都是旧界面。
+# 只比对"进程在不在"是不够的, 必须比对 inode。
+running_inode() {
+  local pid="$1"
+  lsof -p "$pid" 2>/dev/null | awk '$4=="txt" && /interviewd/ {print $8; exit}'
+}
+
+# binary_is_stale 判断"运行中的进程是不是在跑一个已被替换掉的旧二进制"。
+binary_is_stale() {
+  local pid="$1" run disk
+  run="$(running_inode "$pid")"
+  disk="$(file_inode "$BIN")"
+  [ -n "$run" ] && [ -n "$disk" ] && [ "$run" != "$disk" ]
 }
 
 # frontend_kind 判断服务端给的是新前端还是旧前端。
@@ -84,10 +125,18 @@ stop_port() {
 
 cmd_start() {
   local port="$1" pid
-  if pid="$(running_pid)"; then
-    log "服务已在运行 (pid $pid)"
-    cmd_status "$port"
-    return 0
+  if pid="$(service_pid)"; then
+    # 已在运行, 但可能在跑一个已被替换掉的旧二进制 —— 这时直接重启,
+    # 因为"make up"的语义是"让当前代码生效", 而不是"什么都别做"。
+    if binary_is_stale "$pid"; then
+      warn "运行中的服务(pid $pid)用的是旧二进制(磁盘上的已被重新构建)"
+      warn "自动重启, 让当前代码生效"
+      cmd_stop
+    else
+      log "服务已在运行 (pid $pid), 且就是当前二进制"
+      cmd_status "$port"
+      return 0
+    fi
   fi
 
   [ -x "$BIN" ] || die "找不到可执行文件 $BIN, 先执行: make build"
@@ -151,8 +200,17 @@ cmd_stop() {
 cmd_status() {
   local port="$1" pid
   printf '\n  端口        : %s\n' "$port"
-  if pid="$(running_pid)"; then
+  if pid="$(service_pid)"; then
     printf '  状态        : 运行中 (pid %s)\n' "$pid"
+    [ -f "$PID_FILE" ] || printf '                (pid 文件缺失, 以下信息按端口上的实际进程判定)\n'
+    if binary_is_stale "$pid"; then
+      printf '  二进制      : \033[31m过期 —— 进程跑的是已被替换的旧文件\033[0m\n'
+      printf '                磁盘: %s\n' "$(file_inode "$BIN")"
+      printf '                进程: %s\n' "$(running_inode "$pid")"
+      printf '                修复: make restart(否则浏览器永远是旧界面)\n'
+    else
+      printf '  二进制      : 与磁盘一致\n'
+    fi
   else
     printf '  状态        : 未运行(pid 文件缺失或进程已退出)\n'
   fi
