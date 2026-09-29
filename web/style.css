@@ -577,6 +577,30 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
 .toast[data-kind="error"] { background: #7a2828; }
 .toast[data-kind="info"] { background: var(--dark); }
 
+/* ---------- 覆盖层: 旧结构留下的定位与配色 ----------
+   这个文件的前半部分是给"深色面试间 + 绝对定位小卡片"那套结构写的。
+   现在的候选人自视画面是网格里的一项, 因此必须把 .self-card 的绝对定位、
+   固定宽度与描边还原掉 —— 否则它会带着 top:74px 掉到下面, 盖住操作按钮。
+   (这个 bug 真实出现过: 准备页的"开启设备并测试"被自己的预览框挡住。)
+
+   同理 .room-question 过去只出现在深色 .room 里, 文字是白的;
+   现在它在浅色卡片里, 白字等于看不见。 */
+.self-card {
+  position: static; top: auto; right: auto; width: auto;
+  background: transparent; border: 0; padding: 0; gap: 8px;
+}
+/* 视频框仍然需要成为定位上下文: 角标与电平条是绝对定位在它内部的。 */
+.self-card.video { position: relative; }
+
+.room-question { border-top: 1px solid var(--line); }
+.room-question .question { color: var(--ink); }
+
+/* 步骤条的标题与说明要各占一行。原来它们是行内元素, 会挤成
+   "设备检查确认摄像头、麦克风与网络可用" 这样一句读不断的话。 */
+.stepper li > div { min-width: 0; }
+.stepper li strong { display: block; font-size: 14.5px; }
+.stepper li .small { display: block; font-weight: 400; margin-top: 2px; }
+
 /* ---------- 打印 ----------
    打印/导出 PDF 之前是"点了没反应"的状态: 原因是页面上还挂着导航、
    隐藏弹层与按钮, 打印预览要么空白要么全是控件。这里显式把非报告内容

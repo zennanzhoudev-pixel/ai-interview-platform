@@ -253,7 +253,9 @@ export function renderPrep(root) {
         class: i === current ? 'active' : (i < current ? 'done' : ''),
         onclick: () => { current = i; renderStep(); },
       }, [
-        el('span', { class: 'step-index', text: String(i + 1).padStart(2, '0') }),
+        // 复用样式表里已有的 .num: 它定义了圆形序号以及 active/done 的配色。
+        // 自己另起一个类名会得到"有数字但没有圆"的样子 —— 之前就是这样。
+        el('span', { class: 'num', text: String(i + 1).padStart(2, '0') }),
         el('div', {}, [
           el('strong', { text: step.title }),
           el('span', { class: 'muted small', text: step.hint }),

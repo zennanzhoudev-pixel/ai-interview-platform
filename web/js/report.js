@@ -47,7 +47,7 @@ export function renderReport(container, report, options = {}) {
   container.append(turnSection(report));
 
   if (actions) {
-    container.append(el('div', { class: 'actions report-actions' }, actions));
+    container.append(el('div', { class: 'actions' }, actions));
   }
 }
 

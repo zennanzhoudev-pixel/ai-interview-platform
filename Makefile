@@ -53,7 +53,8 @@ frontend-check: ## 前端模块语法检查(没有构建步骤, 因此需要显�
 	@mkdir -p /tmp/jscheck-ai-interview
 	@for f in web/js/*.js; do cp "$$f" "/tmp/jscheck-ai-interview/$$(basename $$f .js).mjs"; done
 	@for f in /tmp/jscheck-ai-interview/*.mjs; do node --check "$$f"; done
-	@echo "前端模块语法检查通过"
+	node scripts/check-frontend-classes.mjs
+	@echo "前端检查通过(语法 + class 定义 + 样式层叠回归)"
 
 loadtest: ## 并发压测: 同时开 10 场完整面试
 	node deployments/loadtest.mjs --base http://localhost:8080 --sessions 10
