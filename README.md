@@ -71,16 +71,21 @@
 
 ### 3.1 零依赖跑一场完整面试(不需要任何密钥)
 
+`make run` 离线模拟一场面试并输出报告 JSON; `make test` 跑全部单元测试
+(含真实进程的判题沙箱、录像分片合并、租户隔离契约)。
+
 ```bash
-make run          # 离线模拟一场面试, 输出报告 JSON
-make test         # 全部单元测试(含沙箱真实执行、录像分片、租户隔离契约)
+make run
+make test
 ```
 
 ### 3.2 起服务, 用浏览器跑完整链路
 
 ```bash
-make serve        # http://localhost:8080
+make serve
 ```
+
+(监听 8080。想在 8101 上跑见下一节。)
 
 > **前端是编译进二进制的。** 这是刻意的设计(部署只有一个文件、不依赖 CDN,
 > 面试页面不会因为外网挂了白屏), 代价是: 改了 `web/` 下面的任何文件,
@@ -90,14 +95,17 @@ make serve        # http://localhost:8080
 > 已经有一个本地服务在跑(比如 8101)时, 用这一条命令换掉它:
 >
 > ```bash
-> make restart          # 停掉 8101 上的旧进程 -> 重新构建 -> 启动新版
-> make restart-clean    # 同上, 并清掉 8111/8112/8113 之类的历史残留进程
+> make restart
+> make restart-clean
 > ```
 >
-> 想确认浏览器拿到的是新前端, 可以直接问服务端:
+> `make restart` 会停掉 8101 上的旧进程、重新构建、再启动新版;
+> `make restart-clean` 在它之前还会清掉别的端口上的历史残留进程。
+>
+> 想确认浏览器拿到的是新前端, 可以直接问服务端(输出 1 = 新版, 0 = 旧版):
 >
 > ```bash
-> curl -s localhost:8101/ | grep -c "/js/app.js"   # 输出 1 = 新版; 0 = 旧版
+> curl -s localhost:8101/ | grep -c "/js/app.js"
 > ```
 
 ### 3.3 让服务在后台常驻(推荐)
@@ -107,23 +115,31 @@ make serve        # http://localhost:8080
 很容易被误判成代码有问题。
 
 ```bash
-make up        # 后台启动(默认 8101), 关掉终端也不会掉; 会自动等它就绪
-make status    # 看是否在跑, 以及"服务端给的是新前端还是旧前端"
-make logs      # 跟踪日志(Ctrl+C 只退出查看, 不停服务)
-make down      # 停止, 并顺手清理残留的旧版进程
+make up
+make status
+make logs
+make down
 ```
+
+`make up` 后台启动(默认 8101), 关掉终端也不会掉, 并且会等端口就绪后才返回;
+`make status` 看是否在跑、以及服务端给的是新前端还是旧前端;
+`make logs` 跟踪日志(Ctrl+C 只退出查看, 不停服务);
+`make down` 停止, 并顺手清理残留的旧版进程。
 
 ### 3.4 浏览器打不开时的排查顺序
 
 按这个顺序走, 三步之内一定能定位:
 
+先执行 `make status`, 然后对照它的输出:
+
+1. 状态是"未运行" → 服务没起来, 执行 `make up`;
+2. 前端版本是"旧版" → 二进制没换, 执行 `make restart`;
+3. 一切正常但仍然白屏 → 浏览器缓存了旧页面, 硬刷新一次
+   (Mac 是 `Cmd+Shift+R`, Windows 是 `Ctrl+F5`),
+   或者在开发者工具里勾选 Disable cache 后刷新。
+
 ```bash
 make status
-# 1) 状态是"未运行" -> 服务没起来: make up
-# 2) 前端版本是"旧版"  -> 二进制没换: make restart
-# 3) 一切正常但仍白屏  -> 浏览器缓存了旧页面: 硬刷新
-#                           Mac: Cmd+Shift+R / Windows: Ctrl+F5
-#                           (或开发者工具里勾选 Disable cache 后刷新)
 ```
 
 第 3 条曾经真实发生过: 旧版前端的入口是 `/app.js`, 新版改成了模块化入口
@@ -150,9 +166,13 @@ make status
 ### 3.5 起完整依赖(MySQL / Redis / 录制存储 / Jaeger / Prometheus / Grafana)
 
 ```bash
-make docker-up    # 包含 interviewd 本体
-make test-mysql   # 存储契约测试(内存实现与 MySQL 实现跑同一套用例)
+make docker-up
+make test-mysql
 ```
+
+`make docker-up` 会连同面试服务本体一起起来(MySQL / Redis / Jaeger / Prometheus /
+Grafana 都在同一个 compose 里); `make test-mysql` 跑存储契约测试 —— 内存实现与
+MySQL 实现共用同一套用例, 用来保证"本地用内存跑通, 线上换 MySQL"不会出现语义差异。
 
 ---
 
@@ -182,8 +202,11 @@ make test-mysql   # 存储契约测试(内存实现与 MySQL 实现跑同一套�
 开面之前先做一次上游自检, 比让第一场面试替你冒烟划算得多:
 
 ```bash
-make selftest     # 逐个探测 LLM / Embedding / TTS, 并说明 ASR 为什么无法离线探测
+make selftest
 ```
+
+它会逐个探测 LLM / Embedding / TTS, 并说明 ASR 为什么无法离线探测
+(识别质量取决于真实音频与热词表, 用静音去 ping 只会得到一个假的绿灯)。
 
 ---
 
@@ -280,13 +303,17 @@ make selftest     # 逐个探测 LLM / Embedding / TTS, 并说明 ASR 为什么�
 ## 7. 测试
 
 ```bash
-make test              # 单元测试(默认后端)
-make test-race         # 带竞态检测
-make test-mysql        # 存储契约测试: 内存实现与 MySQL 实现跑同一套用例
-make frontend-check    # 前端 ES 模块语法检查(前端没有构建步骤, 因此需要显式校验)
-make lint              # golangci-lint(需要先安装)
-make loadtest          # 并发压测: 同时开 10 场完整面试
+make test
+make test-race
+make test-mysql
+make frontend-check
+make lint
+make loadtest
 ```
+
+依次是: 单元测试、带竞态检测的单元测试、存储契约测试(需要先起 MySQL)、
+前端 ES 模块语法检查(前端没有构建步骤, 因此需要显式校验)、
+golangci-lint(需要先安装)、并发压测(同时开 10 场完整面试)。
 
 测试里有几个刻意的选择:
 
@@ -302,9 +329,12 @@ make loadtest          # 并发压测: 同时开 10 场完整面试
 ## 8. 部署
 
 ```bash
-docker build -t ai-interview-platform .          # 多阶段构建 + distroless 运行镜像
-kubectl apply -f deployments/k8s/interviewd.yaml # Deployment / HPA / PDB / Ingress
+docker build -t ai-interview-platform .
+kubectl apply -f deployments/k8s/interviewd.yaml
 ```
+
+第一条是多阶段构建(distroless 运行镜像); 第二条应用 K8s 清单
+(Deployment / Service / HPA / PDB / Ingress)。
 
 K8s 清单里有三处是专门为"长连接面试"调的, 不是模板默认值:
 
