@@ -545,7 +545,7 @@ func runServer(opts serverOptions) error {
 		StoreKind:          storeKind(sessionStore),
 		AccountStorage:     accountStorageKind(sessionStore),
 		Accounts:           accounts,
-		Practice:           practice.NewManager(practice.Config{}),
+		Practice:           buildPairer(opts, cliLogger),
 		Logger:             logger,
 		Metrics:            metrics,
 		TenantID:           opts.tenantID,
@@ -676,6 +676,29 @@ func openAccountService(
 			"且换个姿势就可能失败。要接近 Face ID 的体验, 请用 -face-matcher=http 接入真实人脸模型服务")
 	}
 	return svc
+}
+
+// buildPairer 选择"真人双向对练"的配对实现。
+//
+// 关键点: **配置了 REDIS_ADDR 就用 Redis**, 否则用内存。
+// 多副本部署时如果配对状态在各自内存里, 两个人在不同实例上排队就永远
+// 配不上 —— 而故障表现是"一直卡在等待页", 既不报错也没有日志。
+// 内存实现只适用于单实例(本地演示)。
+func buildPairer(opts serverOptions, logger *log.Logger) practice.Pairer {
+	if strings.TrimSpace(opts.redisAddr) == "" {
+		return practice.NewManager(practice.Config{})
+	}
+	client := store.NewRedisClient(opts.redisAddr, os.Getenv("REDIS_PASSWORD"), 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		// Redis 不可用时退回内存配对, 并明确告警: 单实例下功能仍然可用,
+		// 多实例下会出问题 —— 这件事必须说出来, 而不是静默降级。
+		logger.Printf("Redis 不可用(%v), 对练配对回退到内存(仅单实例可用)", err)
+		return practice.NewManager(practice.Config{})
+	}
+	logger.Printf("对练配对已使用 Redis: %s(多副本可用)", opts.redisAddr)
+	return practice.NewRedisManager(client, "practice:", practice.Config{})
 }
 
 // buildFaceMatcher 选择人脸匹配器。

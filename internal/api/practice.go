@@ -255,10 +255,17 @@ func (s *Server) practiceInfoFor(tenant string) map[string]any {
 	if s.cfg.Practice == nil {
 		return map[string]any{"enabled": false, "note": "对练功能未启用"}
 	}
+	backend := s.cfg.Practice.Backend()
+	note := "配对状态存在 Redis 里, 因此多副本部署时两个人无论连到哪台实例都能配上。"
+	if backend == "memory" {
+		note = "配对状态放在本实例内存里(仅单实例可用); 多副本部署请配置 REDIS_ADDR, " +
+			"否则两个人在不同实例上排队会一直等不到对方。"
+	}
 	return map[string]any{
 		"enabled": true,
+		"backend": backend,
 		"stats":   s.cfg.Practice.Stats(tenant),
-		"note":    "配对状态放在内存里(秒级临时状态); 对练开始与结束会写入审计日志。多副本部署时需要把等待队列换成 Redis 并加锁。",
+		"note":    note,
 	}
 }
 

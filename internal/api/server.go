@@ -84,9 +84,9 @@ type Config struct {
 	// 为 nil 时这些接口返回 503, 而基于 API Key 与面试会话令牌的
 	// 既有能力不受影响 —— 账号是"给人用的入口", 不是系统运行的前提。
 	Accounts *account.Service
-	// Practice 是真人双向对练的配对管理器。
+	// Practice 是真人双向对练的配对实现(内存或 Redis)。
 	// 为 nil 时对练接口返回 503, 其它能力不受影响。
-	Practice *practice.Manager
+	Practice practice.Pairer
 
 	Logger     *slog.Logger
 	Metrics    *observability.Metrics
