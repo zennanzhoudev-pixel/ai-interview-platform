@@ -70,6 +70,8 @@ func main() {
 		"面试录制件保留天数, 到期后由清理任务删除")
 	adminInvite := flag.String("admin-invite-code", os.Getenv("ADMIN_INVITE_CODE"),
 		"企业成员(管理员/面试官)注册邀请码; 留空表示只能由管理员在后台创建账号")
+	faceThreshold := flag.Float64("face-threshold", envFloat("FACE_THRESHOLD", 0.95),
+		"人脸 1:1 比对通过阈值(0-1); 本地匹配器建议保持在安全侧, 详见 README 的实测数据")
 	faceLogin := flag.Bool("face-login", defaultEnv("FACE_LOGIN", "on") != "off",
 		"是否允许人脸登录(需要先在个人中心录入)")
 	healthcheck := flag.String("healthcheck", "",
@@ -100,7 +102,7 @@ func main() {
 			otlpEndpoint: *otlpEndpoint, logLevel: *logLevel, logFormat: *logFormat,
 			recordingDir: *recordingDir, sandboxEngine: *sandboxEngine,
 			iceServers: *iceServers, retentionDays: *retentionDays,
-			adminInvite: *adminInvite, faceLogin: *faceLogin,
+			adminInvite: *adminInvite, faceLogin: *faceLogin, faceThreshold: *faceThreshold,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
 			os.Exit(1)
@@ -391,6 +393,20 @@ type serverOptions struct {
 	retentionDays int
 	adminInvite   string
 	faceLogin     bool
+	faceThreshold float64
+}
+
+// envFloat 读取浮点环境变量, 非法或缺失时用默认值。
+func envFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 || n > 1 {
+		return fallback
+	}
+	return n
 }
 
 // runServer 启动 Web 服务。
@@ -520,6 +536,7 @@ func runServer(opts serverOptions) error {
 		ICEServers:         parseICEServers(opts.iceServers),
 		Pingers:            buildPingers(tts, asr, embedder, llm.FromEnv()),
 		StoreKind:          storeKind(sessionStore),
+		AccountStorage:     accountStorageKind(sessionStore),
 		Accounts:           accounts,
 		Practice:           practice.NewManager(practice.Config{}),
 		Logger:             logger,
@@ -639,6 +656,7 @@ func openAccountService(
 		AdminInviteCode: invite,
 		Secret:          secret,
 		Matcher:         matcher,
+		FaceThreshold:   opts.faceThreshold,
 		Logger:          logger,
 	})
 	info := svc.MatcherInfo()
@@ -808,6 +826,18 @@ func parseICEServers(raw string) []map[string]any {
 		return nil
 	}
 	return []map[string]any{{"urls": urls}}
+}
+
+// accountStorageKind 说明账号存在哪。
+//
+// 它会被透出到 /api/v1/auth/me 与个人中心: 内存存储意味着**重启后账号与
+// 人脸模板都会消失**, 而用户看到的表现是"我明明录入了却登不上"。
+// 与其让人反复怀疑功能有 bug, 不如把这件事直接写在界面上。
+func accountStorageKind(sessionStore store.SessionStore) string {
+	if _, ok := sessionStore.(*store.MySQLStore); ok {
+		return "mysql"
+	}
+	return "memory"
 }
 
 // storeKind 返回存储后端的展示名。

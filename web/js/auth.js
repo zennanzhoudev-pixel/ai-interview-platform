@@ -261,6 +261,16 @@ function renderFaceLogin(body, root) {
   body.append(
     el('h2', { text: '人脸登录' }),
     el('label', {}, ['账号', identifier]),
+    me.account_storage === 'memory'
+      ? el('div', { class: 'callout warn' }, [
+          el('strong', { text: '当前账号存在内存里' }),
+          el('p', {
+            class: 'muted small',
+            text: '服务重启后账号与人脸模板都会消失(这也是"录入了却登不上"最常见的原因)。'
+              + '用 MYSQL_DSN 启动可以把账号持久化到数据库。',
+          }),
+        ])
+      : null,
     el('div', { class: 'face-capture' }, [video]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn primary', text: '开始刷脸', onclick: capture }),
@@ -318,6 +328,16 @@ export function renderProfile(root) {
           || '它是图像相似度匹配, 会受光线与姿态影响, 也挡不住用照片冒充; 生产环境请接入云厂商人脸 API 或本地 SDK。',
       }),
     ]),
+    me.account_storage === 'memory'
+      ? el('div', { class: 'callout warn' }, [
+          el('strong', { text: '当前账号存在内存里' }),
+          el('p', {
+            class: 'muted small',
+            text: '服务重启后账号与人脸模板都会消失(这也是"录入了却登不上"最常见的原因)。'
+              + '用 MYSQL_DSN 启动可以把账号持久化到数据库。',
+          }),
+        ])
+      : null,
     el('div', { class: 'face-capture' }, [video]),
     el('div', { class: 'actions' }, [
       el('button', {
@@ -373,6 +393,28 @@ export function renderProfile(root) {
             toast('人脸模板已移除');
           } catch (err) {
             toast(err.message, 'error');
+          }
+        },
+      }) : null,
+      face.enrolled ? el('button', {
+        class: 'btn outline',
+        text: '测一次(看相似度)',
+        onclick: async () => {
+          // "登不进去"最终都能归结成一个数字。把分数摊出来, 用户就不用反复试,
+          // 维护者也不用猜是光线、姿势还是阈值的问题。
+          try {
+            if (!stream) {
+              stream = await openMedia({ video: true, audio: false });
+              video.srcObject = stream;
+            }
+            const frame = await grabFrame(video);
+            const result = await api.post('/api/v1/auth/face/check', { frame });
+            faceStatus.textContent = `相似度 ${result.score.toFixed(4)} · 阈值 ${result.threshold.toFixed(2)} · `
+              + `${result.pass ? '可以通过' : '不会通过(换个光线或姿势再试)'}`;
+            faceStatus.className = result.pass ? 'muted small' : 'muted small error';
+          } catch (err) {
+            faceStatus.textContent = err.message;
+            faceStatus.className = 'muted small error';
           }
         },
       }) : null,

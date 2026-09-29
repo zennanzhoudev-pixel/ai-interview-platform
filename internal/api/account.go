@@ -265,6 +265,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		payload["face"] = map[string]any{"enrolled": false}
 	}
 	payload["matcher"] = s.cfg.Accounts.MatcherInfo()
+	payload["account_storage"] = defaultString(s.cfg.AccountStorage, "memory")
+	payload["face_threshold"] = s.cfg.Accounts.Threshold()
 	writeJSON(w, http.StatusOK, payload)
 }
 
@@ -322,6 +324,32 @@ func (s *Server) handleFaceEnroll(w http.ResponseWriter, r *http.Request) {
 		"quality": profile.Quality, "frames": profile.Frames, "dim": profile.Dim,
 		"note": "人脸模板只保存特征向量, 不保存照片; 可随时在个人中心移除。",
 	})
+}
+
+// handleFaceCheck 用当前画面与已录入样本比一次, 只返回分数。
+//
+// 这是给"录入了却登不上"准备的自检工具: 它把"登不进去"变成
+// "相似度 0.71 / 阈值 0.90"这样一个可以被讨论、被调整的数字。
+func (s *Server) handleFaceCheck(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentAccount(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "未登录")
+		return
+	}
+	var req struct {
+		Frame string `json:"frame"`
+	}
+	if !decodeBody(w, r, 2<<20, &req) {
+		return
+	}
+	ctx, cancel := s.storeCtx(r.Context())
+	defer cancel()
+	result, err := s.cfg.Accounts.FaceCheck(ctx, user.TenantID, user.ID, req.Frame)
+	if err != nil {
+		accountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleFaceDelete 移除人脸。

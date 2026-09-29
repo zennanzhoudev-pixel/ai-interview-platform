@@ -183,16 +183,21 @@ func (m *MySQLStore) PutFace(ctx context.Context, p FaceProfile) error {
 	if p.EnrolledAt.IsZero() {
 		p.EnrolledAt = now
 	}
+	if p.Samples <= 0 {
+		// 兼容只有单张模板的历史数据。
+		p.Samples = 1
+		p.Dim = len(p.Template)
+	}
 	raw := encodeFloat32(p.Template)
 	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO account_face
-			(tenant_id, user_id, template, dim, matcher, assurance, quality, frames, enrolled_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)
+			(tenant_id, user_id, template, dim, samples, matcher, assurance, quality, frames, enrolled_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE
-			template=VALUES(template), dim=VALUES(dim), matcher=VALUES(matcher),
+			template=VALUES(template), dim=VALUES(dim), samples=VALUES(samples), matcher=VALUES(matcher),
 			assurance=VALUES(assurance), quality=VALUES(quality), frames=VALUES(frames),
 			updated_at=VALUES(updated_at)`,
-		p.TenantID, p.UserID, raw, len(p.Template), p.Matcher, p.Assurance,
+		p.TenantID, p.UserID, raw, p.Dim, p.Samples, p.Matcher, p.Assurance,
 		p.Quality, p.Frames, p.EnrolledAt.UTC(), now)
 	return err
 }
@@ -204,9 +209,9 @@ func (m *MySQLStore) GetFace(ctx context.Context, tenantID, userID string) (Face
 		raw []byte
 	)
 	err := m.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, template, dim, matcher, assurance, quality, frames, enrolled_at, updated_at
+		SELECT tenant_id, user_id, template, dim, samples, matcher, assurance, quality, frames, enrolled_at, updated_at
 		FROM account_face WHERE tenant_id=? AND user_id=?`, tenantID, userID).
-		Scan(&p.TenantID, &p.UserID, &raw, &p.Dim, &p.Matcher, &p.Assurance,
+		Scan(&p.TenantID, &p.UserID, &raw, &p.Dim, &p.Samples, &p.Matcher, &p.Assurance,
 			&p.Quality, &p.Frames, &p.EnrolledAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return FaceProfile{}, ErrFaceNotEnrolled

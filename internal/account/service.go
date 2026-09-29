@@ -27,6 +27,7 @@ type Service struct {
 	secret          []byte
 	sessionTTL      time.Duration
 	now             func() time.Time
+	faceThreshold   float64
 }
 
 // Config 配置账号服务。
@@ -44,6 +45,10 @@ type Config struct {
 	// Hasher 可为 nil, 默认使用生产参数的 PBKDF2。
 	Hasher  *PasswordHasher
 	Matcher Matcher
+	// FaceThreshold 是 1:1 比对通过所需的相似度, 默认见 defaultFaceMatchThreshold。
+	// 它是可配置的, 因为"本地图像相似度"的可信区间因摄像头与光线而异 ——
+	// 与其让所有人被一个写死的数字卡住, 不如把阈值与实测分数都暴露出来。
+	FaceThreshold float64
 	// SessionTTL 默认 7 天。面试系统的登录态过长没有好处:
 	// 候选人用完就走, 而企业成员应当定期重新认证。
 	SessionTTL time.Duration
@@ -68,6 +73,9 @@ func New(cfg Config) *Service {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.FaceThreshold <= 0 || cfg.FaceThreshold > 1 {
+		cfg.FaceThreshold = defaultFaceMatchThreshold
+	}
 	return &Service{
 		store:           cfg.Store,
 		hasher:          cfg.Hasher,
@@ -78,7 +86,16 @@ func New(cfg Config) *Service {
 		secret:          cfg.Secret,
 		sessionTTL:      cfg.SessionTTL,
 		now:             cfg.Now,
+		faceThreshold:   cfg.FaceThreshold,
 	}
+}
+
+// threshold 返回当前生效的人脸比对阈值。
+func (s *Service) threshold() float64 {
+	if s.faceThreshold <= 0 {
+		return defaultFaceMatchThreshold
+	}
+	return s.faceThreshold
 }
 
 // MatcherInfo 描述当前的人脸匹配能力, 用于自检与界面提示。
@@ -86,7 +103,7 @@ func (s *Service) MatcherInfo() map[string]any {
 	return map[string]any{
 		"name":      s.matcher.Name(),
 		"assurance": s.matcher.Assurance(),
-		"threshold": faceMatchThreshold,
+		"threshold": s.threshold(),
 		"note": "当前使用的是本地图像相似度匹配(开发用途), 不是认证级人脸识别; " +
 			"生产环境请接入云厂商人脸 API 或本地 SDK(实现 Matcher 接口即可)",
 	}
@@ -277,11 +294,13 @@ func (s *Service) LoginWithFace(ctx context.Context, in FaceLoginInput) (User, I
 	if err != nil {
 		return User{}, IssuedSession{}, 0, err
 	}
-	score := s.matcher.Compare(profile.Template, vec)
+	// 与全部注册样本比对(含平移容忍), 取最高分 —— 而不是只跟一张平均模板比。
+	score := s.matcher.CompareBest(UnpackSamples(profile.Template, profile.Dim, profile.Samples), vec)
 	s.logger.InfoContext(ctx, "人脸登录比对",
 		"tenant", tenant, "user_id", u.ID, "score", score, "quality", quality,
+		"samples", profile.Samples, "threshold", s.threshold(),
 		"matcher", s.matcher.Name(), "assurance", s.matcher.Assurance())
-	if score < faceMatchThreshold {
+	if score < s.threshold() {
 		return User{}, IssuedSession{}, score, ErrFaceMismatch
 	}
 	user, session, err := s.finishLogin(ctx, u, in.IP, in.UserAgent)
@@ -410,16 +429,28 @@ func (s *Service) EnrollFace(ctx context.Context, tenantID, userID string, frame
 				ErrFaceLowQuality, score)
 		}
 	}
-	template, err := AverageTemplates(vecs)
+	// 只存一张平均模板, **不做多样本匹配**。
+	//
+	// 我先试过"每帧单独保留 + 取最高分", 理由是给同一个人多几次机会。
+	// 实测(见 service_test.go 的 Posture 用例)结果是: 本人换姿势 0.75,
+	// 而"最像的别人"从 0.89 涨到了 0.91 —— 取最大值对**任何一对**画面
+	// 都会虚高(多重比较效应), 于是阈值被穿透。
+	//
+	// 多帧的作用因此保留在"注册质量校验"这一侧(相邻帧必须一致),
+	// 而不进入匹配: 匹配策略越宽松, 安全性越差, 而这里缺的从来不是
+	// 宽容度, 是一个能容忍姿势变化的**模型**。
+	mean, err := AverageTemplates(vecs)
 	if err != nil {
 		return FaceProfile{}, err
 	}
+	flat, dim, count := PackSamples([][]float32{mean})
 	now := s.now()
 	profile := FaceProfile{
 		TenantID:   tenantID,
 		UserID:     userID,
-		Template:   template,
-		Dim:        len(template),
+		Template:   flat,
+		Dim:        dim,
+		Samples:    count,
 		Matcher:    s.matcher.Name(),
 		Assurance:  s.matcher.Assurance(),
 		Quality:    qualitySum / float64(len(vecs)),
@@ -435,7 +466,8 @@ func (s *Service) EnrollFace(ctx context.Context, tenantID, userID string, frame
 		return FaceProfile{}, err
 	}
 	s.logger.InfoContext(ctx, "人脸模板已录入",
-		"tenant", tenantID, "user_id", userID, "frames", len(vecs), "matcher", s.matcher.Name())
+		"tenant", tenantID, "user_id", userID, "frames", len(vecs), "samples", count,
+		"threshold", s.threshold(), "matcher", s.matcher.Name())
 	return profile, nil
 }
 
@@ -458,6 +490,49 @@ func (s *Service) DeleteFace(ctx context.Context, tenantID, userID string) error
 func (s *Service) FaceStatus(ctx context.Context, tenantID, userID string) (FaceProfile, error) {
 	return s.store.GetFace(ctx, tenantID, userID)
 }
+
+// FaceCheck 用当前画面与已录入的样本比一次, 只返回分数, 不签发会话。
+//
+// 为什么需要它: "录入了却登不上"最终都能归结成一个数字 —— 相似度是多少、
+// 阈值是多少、差多少。没有这个数字时, 用户只能反复试, 而维护者只能猜。
+// 它也为"要不要调阈值"提供了依据: 先看到真实分数, 再决定怎么调。
+func (s *Service) FaceCheck(ctx context.Context, tenantID, userID, frame string) (map[string]any, error) {
+	profile, err := s.store.GetFace(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	img, err := DecodeDataURL(frame)
+	if err != nil {
+		return nil, err
+	}
+	vec, quality, err := s.matcher.Embed(img)
+	if err != nil {
+		return nil, err
+	}
+	samples := UnpackSamples(profile.Template, profile.Dim, profile.Samples)
+	best := s.matcher.CompareBest(samples, vec)
+	// 逐样本分数也返回: 能看出"是哪一张注册样本最像", 有助于判断
+	// 是注册质量不行, 还是这次的光线/姿态差太远。
+	per := make([]map[string]any, 0, len(samples))
+	for i, sample := range samples {
+		per = append(per, map[string]any{
+			"index": i, "score": s.matcher.CompareOne(sample, vec),
+		})
+	}
+	return map[string]any{
+		"score":      best,
+		"threshold":  s.threshold(),
+		"pass":       best >= s.threshold(),
+		"quality":    quality,
+		"samples":    len(samples),
+		"per_sample": per,
+		"matcher":    s.matcher.Name(),
+		"assurance":  s.matcher.Assurance(),
+	}, nil
+}
+
+// Threshold 返回当前生效的比对阈值(供接口展示与运维核对)。
+func (s *Service) Threshold() float64 { return s.threshold() }
 
 // ListUsers 列出本租户账号(调用方负责脱敏展示与权限校验)。
 func (s *Service) ListUsers(ctx context.Context, tenantID string, limit int) ([]User, error) {

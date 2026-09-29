@@ -76,6 +76,10 @@ type Config struct {
 	Pingers map[string]ProviderPing
 	// StoreKind 是存储后端的展示名(用于自检面板如实说明"数据存在哪")。
 	StoreKind string
+	// AccountStorage 说明账号存在哪: "mysql" 或 "memory"。
+	// 内存存储意味着**重启后账号与人脸模板都会消失**, 而这件事必须让
+	// 用户看见 —— 否则"我明明录入过人脸"会变成一个查不出原因的问题。
+	AccountStorage string
 	// Accounts 是账号体系(注册/登录/人脸/个人中心)。
 	// 为 nil 时这些接口返回 503, 而基于 API Key 与面试会话令牌的
 	// 既有能力不受影响 —— 账号是"给人用的入口", 不是系统运行的前提。
@@ -308,6 +312,9 @@ func (s *Server) routes() {
 		s.withAccount(auth.PermSelfService, s.handleFaceEnroll))
 	s.mux.Handle("DELETE /api/v1/auth/face",
 		s.withAccount(auth.PermSelfService, s.handleFaceDelete))
+	// 人脸自检: 只返回相似度与阈值, 不签发会话 —— 用来诊断"录入了却登不上"。
+	s.mux.Handle("POST /api/v1/auth/face/check",
+		s.withAccount(auth.PermSelfService, s.handleFaceCheck))
 	s.mux.Handle("GET /api/v1/auth/accounts",
 		s.withPermission(auth.PermKeyAdmin, s.handleAccounts))
 	// 候选人的历史面试记录: 只能看到与自己引用值匹配的那些会话。

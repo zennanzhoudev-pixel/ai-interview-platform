@@ -235,7 +235,15 @@ func (m *MemoryStore) PutFace(_ context.Context, p FaceProfile) error {
 		p.EnrolledAt = m.now()
 	}
 	p.UpdatedAt = m.now()
-	p.Dim = len(p.Template)
+	// 只有在调用方没给维度信息时才推断。
+	//
+	// 多样本模板里 Template 是"多段拼在一起", 直接写 len(Template) 会把
+	// 单样本维度记成整段长度, 拆包时拆出垃圾向量 —— 表现是相似度恒为 0,
+	// 而用户看到的是"录入了却登不上"。
+	if p.Samples <= 0 {
+		p.Samples = 1
+		p.Dim = len(p.Template)
+	}
 	m.faces[key] = p
 	return nil
 }

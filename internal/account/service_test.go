@@ -315,6 +315,34 @@ func syntheticFace(seed int, noise float64) image.Image {
 	return img
 }
 
+// shiftImage 把图片整体平移若干像素, 用来模拟"这次坐得偏了一点"。
+// 越界的部分用边缘像素填充, 避免补零在降采样后形成一条明显的黑边
+// (那会让测试测量的是"黑边"而不是"位移")。
+func shiftImage(img image.Image, dx, dy int) image.Image {
+	b := img.Bounds()
+	out := image.NewRGBA(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		sy := y - dy
+		if sy < b.Min.Y {
+			sy = b.Min.Y
+		}
+		if sy >= b.Max.Y {
+			sy = b.Max.Y - 1
+		}
+		for x := b.Min.X; x < b.Max.X; x++ {
+			sx := x - dx
+			if sx < b.Min.X {
+				sx = b.Min.X
+			}
+			if sx >= b.Max.X {
+				sx = b.Max.X - 1
+			}
+			out.Set(x, y, img.At(sx, sy))
+		}
+	}
+	return out
+}
+
 func dataURL(t *testing.T, img image.Image) string {
 	t.Helper()
 	raw, err := EncodeJPEG(img, 85)
@@ -405,6 +433,96 @@ func TestFaceEnrollThenLoginSucceedsAndImpostorFails(t *testing.T) {
 		Identifier: "chen@example.com", Frame: dataURL(t, syntheticFace(8, 0.5)),
 	}); !errors.Is(err, ErrFaceMismatch) {
 		t.Fatalf("结构不同的画面不应通过, 实际 %v (score=%.4f)", err, score)
+	}
+}
+
+// TestFacePostureLimitIsRealAndNotFixableByThreshold 记录一个**实测出来的硬限制**。
+//
+// 用户反馈过"录入了却登不上"。这次把原因量化了(48x48 网格, 240px 画面):
+//
+//	同一个人, 姿态不变, 只有噪声差异 : 1.00  → 通过
+//	同一个人, 整体平移 12 像素      : 0.75  → 不通过
+//	不同的人(五官结构不同)          : 0.63 / 0.63 / 0.89
+//
+// 关键在于 **0.75 与 0.89 是重叠的**: 本人换个姿势比最像的"别人"还要低。
+// 因此"调低阈值"不可能修好这件事 —— 那只会先把别人放进来。
+//
+// 中途试过给匹配加 ±2 格平移容忍, 结果是本人过了, 但"别人"也涨到 0.92
+// (25 种对齐里取最大值, 任何一对都会虚高)。已撤回, 理由写在 face.go。
+//
+// 结论: 本地图像相似度只能用于演示; 真实的姿势/光线鲁棒性必须来自
+// 人脸模型(SDK 或云 API)。这个断言存在的意义就是防止有人用调阈值来"修"它。
+func TestFacePostureLimitIsRealAndNotFixableByThreshold(t *testing.T) {
+	s := testService(t)
+	u := registerCandidate(t, s, "chen@example.com", "")
+	ctx := context.Background()
+	if _, err := s.EnrollFace(ctx, u.TenantID, u.ID, []string{
+		dataURL(t, syntheticFace(11, 0.4)),
+		dataURL(t, syntheticFace(11, 0.6)),
+		dataURL(t, syntheticFace(11, 0.8)),
+	}); err != nil {
+		t.Fatalf("录入人脸失败: %v", err)
+	}
+	// 整体平移 12 像素: 模拟"这次坐偏了一点"。
+	shifted := shiftImage(syntheticFace(11, 0.5), 12, 8)
+	_, _, postureScore, postureErr := s.LoginWithFace(ctx, FaceLoginInput{
+		Identifier: "chen@example.com", Frame: dataURL(t, shifted),
+	})
+	// 这里**不断言"本人必须能过"**: 本地匹配器做不到。断言只会逼着后来的人
+	// 去调低阈值, 而调低阈值的代价是把别人放进来。用例的职责是记录事实。
+	// 姿势变化后的本人分数, 与"最像的别人"的分数会重叠 —— 这正是不能
+	// 靠阈值解决的原因, 因此把两者都记下来当证据。
+	_, _, impostorScore, impostorErr := s.LoginWithFace(ctx, FaceLoginInput{
+		Identifier: "chen@example.com", Frame: dataURL(t, syntheticFace(77, 0.5)),
+	})
+	if impostorErr == nil {
+		t.Fatalf("最像的「别人」不应通过(score=%.4f): 阈值被穿透了", impostorScore)
+	}
+	if postureScore > impostorScore {
+		t.Fatalf("本用例的前提是「本人换姿势的分数不高于最像的别人」, "+
+			"两者的实测值分别是 %.4f 与 %.4f; 若这个关系变了, 说明匹配器有了实质改进, "+
+			"请重新评估阈值", postureScore, impostorScore)
+	}
+	t.Logf("实测: 本人换姿势 %.4f(不通过: %v), 最像的别人 %.4f —— 两者重叠, 调阈值修不好",
+		postureScore, postureErr != nil, impostorScore)
+	// 换人仍然必须被拒 —— 放宽容忍度不能把安全性一起放宽。
+	if _, _, score, err := s.LoginWithFace(ctx, FaceLoginInput{
+		Identifier: "chen@example.com", Frame: dataURL(t, syntheticFace(77, 0.5)),
+	}); !errors.Is(err, ErrFaceMismatch) {
+		t.Fatalf("换人仍应被拒(score=%.4f), 实际 %v", score, err)
+	}
+}
+
+// TestFaceCheckReportsScoreAndThreshold 保证"登不上"这件事是可诊断的。
+func TestFaceCheckReportsScoreAndThreshold(t *testing.T) {
+	s := testService(t)
+	u := registerCandidate(t, s, "chen@example.com", "")
+	ctx := context.Background()
+	if _, err := s.EnrollFace(ctx, u.TenantID, u.ID, []string{
+		dataURL(t, syntheticFace(5, 0.5)), dataURL(t, syntheticFace(5, 0.6)),
+	}); err != nil {
+		t.Fatalf("录入人脸失败: %v", err)
+	}
+	result, err := s.FaceCheck(ctx, u.TenantID, u.ID, dataURL(t, syntheticFace(5, 0.4)))
+	if err != nil {
+		t.Fatalf("人脸自检失败: %v", err)
+	}
+	if score, _ := result["score"].(float64); score <= 0 {
+		t.Fatalf("自检应给出相似度: %+v", result)
+	}
+	if threshold, _ := result["threshold"].(float64); threshold <= 0 {
+		t.Fatalf("自检应给出阈值: %+v", result)
+	}
+	if result["pass"] != true {
+		t.Fatalf("同一人的自检应当通过: %+v", result)
+	}
+	// 当前只保留一张平均模板(多样本匹配已验证会穿透阈值, 见 Posture 用例),
+	// 因此这里断言的是"自检能如实报出用的是几个样本", 而不是"样本越多越好"。
+	if samples, _ := result["samples"].(int); samples != 1 {
+		t.Fatalf("当前实现应只使用一张平均模板, 实际 %d 份", samples)
+	}
+	if detail, _ := result["per_sample"].([]map[string]any); len(detail) != 1 {
+		t.Fatalf("应逐样本给出分数: %+v", result["per_sample"])
 	}
 }
 

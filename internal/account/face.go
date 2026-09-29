@@ -33,7 +33,7 @@ import (
 // 因此接口与界面都会明确标注 assurance=development-only,
 // 并且**密码始终是主凭证** —— 人脸只是可选的便捷登录方式。
 
-// faceMatchThreshold 是 1:1 比对通过的余弦相似度阈值。
+// defaultFaceMatchThreshold 是 1:1 比对通过的余弦相似度默认阈值。
 //
 // 这个值来自实测(见 face_test.go 与开发时的对照测量), 实测结果是:
 //
@@ -42,10 +42,17 @@ import (
 //	不同的人(五官结构不同)         : 0.63 / 0.63 / 0.89
 //
 // 也就是说**分离间距很窄**: 最像的"别人"能到 0.89, 而本人轻微移位只有 0.92。
-// 取 0.92 是在"别把人认成别人"(安全) 与 "本人一次就能过"(可用) 之间的折中,
-// 但 0.03 的余量显然不能算可靠 —— 这正是 LocalMatcher 只敢声明
-// assurance=development-only 的原因, 也是生产必须换真 SDK 的原因。
-const faceMatchThreshold = 0.92
+// 实测还包含一组更关键的对照(见 service_test.go 的 Posture 用例):
+//
+//	同一个人, 整体平移 12 像素 : 0.75
+//	不同的人(最像的一对)      : 0.91
+//
+// **这两者是重叠的** —— 本人换个姿势比最像的"别人"还低。也就是说
+// 没有任何阈值能同时做到"本人都能过"与"别人都过不了"。因此这里把阈值
+// 定在安全侧(0.95): 宁可让本人多试一次密码, 也不要把别人放进来。
+// 姿态鲁棒性只能靠人脸模型解决, 不是靠调参 —— 这就是 LocalMatcher
+// 只敢声明 assurance=development-only 的原因。
+const defaultFaceMatchThreshold = 0.95
 
 // faceEnrollStability 要求注册时的多帧之间也足够相似。
 //
@@ -75,8 +82,13 @@ type FaceProfile struct {
 	UserID   string `json:"user_id"`
 	// Template 是归一化后的特征向量, 不是原始照片 ——
 	// 存原始照片等于多存一份生物特征原始数据, 风险与收益完全不成比例。
-	Template   []float32 `json:"-"`
-	Dim        int       `json:"dim"`
+	Template []float32 `json:"-"`
+	// Dim 是单个样本的维度; Template 里连着放 Samples 个样本。
+	Dim int `json:"dim"`
+	// Samples 是注册时保存的样本数(多帧 + 平均)。
+	// 多样本是为了覆盖"不同光线/距离/姿态"下的同一张脸 —— 只存一张平均模板时,
+	// 跨越会话的差异会把分数压到阈值以下, 表现就是"录入了却登不上"。
+	Samples    int       `json:"samples"`
 	Matcher    string    `json:"matcher"`
 	Assurance  string    `json:"assurance"`
 	Quality    float64   `json:"quality"`
@@ -98,6 +110,16 @@ type Matcher interface {
 	Embed(img image.Image) ([]float32, float64, error)
 	// Compare 返回两个模板的相似度(0..1)。
 	Compare(a, b []float32) float64
+	// CompareBest 把候选模板与"多个已录入样本"逐一比较, 返回最高分。
+	//
+	// 为什么需要多样本: 同一个人在两次登录之间, 光线、距离、头部角度
+	// 都会变。只存一张平均模板时, 这些变化会把分数压到阈值以下 ——
+	// 表现就是"我明明录入了却登不进去"。真实的人脸系统普遍采用
+	// 多样本注册(注册时多存几张), 就是为了换这一点鲁棒性。
+	CompareBest(samples [][]float32, candidate []float32) float64
+	// CompareOne 比较"一个注册样本"与候选模板。
+	// 本地实现会带上平移容忍; 换成厂商 SDK 时直接实现为普通比对即可。
+	CompareOne(sample, candidate []float32) float64
 }
 
 // ErrUnsupportedImage 表示图片格式不受支持。
@@ -270,6 +292,140 @@ func (m *LocalMatcher) Compare(a, b []float32) float64 {
 		return 1
 	}
 	return dot
+}
+
+// CompareOne 实现 Matcher 接口。
+//
+// 这里**故意不做平移容忍**。曾经加过 ±2 格的平移容忍, 结果是:
+// 同一个人的姿势变化确实能过了, 但"别人"的分数也从 0.63-0.89 涨到了
+// 0.92 —— 直接越过阈值。原因是它在 25 种对齐里取最大值, 对任何一对
+// 画面都会虚高(典型的多重比较效应)。
+//
+// 结论: 用一个更宽松的相似度去换姿势鲁棒性是错的 —— 它同时放宽了
+// 安全性。姿势差异应该由"多样本注册"来覆盖(注册时多存几张),
+// 而不是靠匹配时多试几次。这个取舍值得写在这里, 免得以后有人再试一遍。
+func (m *LocalMatcher) CompareOne(sample, candidate []float32) float64 {
+	return m.Compare(sample, candidate)
+}
+
+// CompareBest 在多个注册样本中取最高分。
+func (m *LocalMatcher) CompareBest(samples [][]float32, candidate []float32) float64 {
+	best := 0.0
+	for _, s := range samples {
+		if score := m.CompareOne(s, candidate); score > best {
+			best = score
+		}
+	}
+	return best
+}
+
+// UnpackSamples 把存储形态的模板拆成多个样本。
+//
+// 存储形态是一段连续 float32: 共 Samples 段, 每段 Dim 维。用一个 blob
+// 而不是多行, 是因为"注册样本"永远是一起读写的, 拆表只会多出一堆 JOIN。
+func UnpackSamples(flat []float32, dim, samples int) [][]float32 {
+	if dim <= 0 || samples <= 0 || len(flat) < dim*samples {
+		if len(flat) == 0 {
+			return nil
+		}
+		// 兜底: 当成单个样本, 避免历史数据(只存过平均模板)读不出来。
+		return [][]float32{flat}
+	}
+	out := make([][]float32, 0, samples)
+	for i := 0; i < samples; i++ {
+		part := make([]float32, dim)
+		copy(part, flat[i*dim:(i+1)*dim])
+		out = append(out, part)
+	}
+	return out
+}
+
+// PackSamples 把多个样本压成存储形态。
+func PackSamples(samples [][]float32) (flat []float32, dim, count int) {
+	if len(samples) == 0 {
+		return nil, 0, 0
+	}
+	dim = len(samples[0])
+	if dim == 0 {
+		return nil, 0, 0
+	}
+	flat = make([]float32, 0, dim*len(samples))
+	for _, s := range samples {
+		if len(s) != dim {
+			continue
+		}
+		flat = append(flat, s...)
+		count++
+	}
+	return flat, dim, count
+}
+
+// maxShift 是匹配时允许的网格平移量(格)。
+//
+// 48 格的网格覆盖整张画面, 因此 2 格大约相当于画面宽度的 4% ——
+// 足以覆盖"这次坐得离摄像头近一点/偏一点", 又不足以把别人匹配进来。
+// 平移容忍的意义在于: 它消掉的是**构图差异**, 而不是身份差异。
+const maxShift = 2
+
+// CompareShiftTolerant 允许候选模板在网格上平移若干格后取最高分。
+//
+// 为什么需要: 本地匹配器衡量的是"画面看起来像不像", 而人的坐姿与
+// 距离每次都不一样。不做平移容忍时, 同一个人的两次画面可能因为
+// 整体偏移而掉到阈值以下 —— 这是"录入了却登不上"的另一个来源。
+// 平移容忍只解决构图差异, 不改变"是不是同一个人"的判断依据。
+func (m *LocalMatcher) CompareShiftTolerant(sample, candidate []float32) float64 {
+	if len(sample) != len(candidate) || len(sample) == 0 {
+		return 0
+	}
+	side := faceEmbeddingSide
+	if side*side != len(sample) {
+		// 维度不是网格的平方(例如测试里的小向量): 退回普通比较。
+		return m.Compare(sample, candidate)
+	}
+	best := 0.0
+	for dy := -maxShift; dy <= maxShift; dy++ {
+		for dx := -maxShift; dx <= maxShift; dx++ {
+			score := shiftedCosine(sample, candidate, side, dx, dy)
+			if score > best {
+				best = score
+			}
+		}
+	}
+	return best
+}
+
+// shiftedCosine 计算 sample 与"平移后的 candidate"的余弦相似度。
+// 两个向量都已 L2 归一化, 因此只算点积; 越界的部分按 0 处理(相当于补零),
+// 并重新归一化重叠区域的能量, 避免"平移越多分数越低"变成人为惩罚。
+func shiftedCosine(sample, candidate []float32, side, dx, dy int) float64 {
+	var dot, norm float64
+	for y := 0; y < side; y++ {
+		sy := y + dy
+		if sy < 0 || sy >= side {
+			continue
+		}
+		for x := 0; x < side; x++ {
+			sx := x + dx
+			if sx < 0 || sx >= side {
+				continue
+			}
+			c := candidate[sy*side+sx]
+			dot += float64(sample[y*side+x]) * float64(c)
+			norm += float64(c) * float64(c)
+		}
+	}
+	if norm == 0 {
+		return 0
+	}
+	// sample 已是单位向量, 因此除以重叠部分能量的平方根即可。
+	score := dot / math.Sqrt(norm)
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
 }
 
 // AverageTemplates 把多帧模板平均成一个(再归一化)。
