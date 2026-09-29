@@ -1,4 +1,4 @@
-.PHONY: help run serve selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
+.PHONY: help run serve restart restart-clean selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
 
 GO ?= go
 BIN := bin/interviewd
@@ -11,6 +11,12 @@ run: ## 本地跑一场模拟文本面试, 输出面试报告 JSON
 
 serve: ## 启动 Web 服务(浏览器打开 http://localhost:8080)
 	$(GO) run ./cmd/interviewd -serve :8080
+
+restart: ## 把本机 8101 上的旧进程换成当前代码构建的新版(改完前端必须做这一步)
+	./scripts/restart-local.sh 8101
+
+restart-clean: ## 同上, 并清掉 8111/8112/8113 的验证残留进程
+	./scripts/restart-local.sh 8101 --clean-legacy
 
 selftest: ## 联调自检: 探测已配置的 LLM / ASR / TTS / Embedding 是否真的可用
 	$(GO) run ./cmd/interviewd -selftest
