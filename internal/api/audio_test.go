@@ -34,7 +34,7 @@ func TestVoiceLoopCarriesAudioUplinkAndTranscript(t *testing.T) {
 	defer ts.Close()
 
 	_, body := createSession(t, ts.URL, map[string]any{
-		"round": 1, "minutes": 45, "consent_recording": true,
+		"round": 1, "minutes": 45, "consent_recording": true, "consent_scoring": true,
 	})
 	id := body["session_id"].(string)
 
@@ -116,7 +116,7 @@ func TestVoiceModeRejectsBinaryWithoutProviders(t *testing.T) {
 	ts := httptest.NewServer(NewServer(Config{Store: store.NewMemoryStore()}).Handler())
 	defer ts.Close()
 
-	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "consent_recording": true})
+	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "consent_recording": true, "consent_scoring": true})
 	id := body["session_id"].(string)
 
 	conn := dialWS(t, ts, id)

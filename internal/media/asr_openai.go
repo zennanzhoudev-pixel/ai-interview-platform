@@ -50,7 +50,7 @@ func (p *OpenAIASR) Open(ctx context.Context, cfg ASRConfig) (ASRStream, error) 
 		segmentMS: p.segmentMS(),
 		closed:    make(chan struct{}),
 	}
-	go stream.loop()
+	safeGo(ctx, "media.openai_asr", stream.loop)
 	return stream, nil
 }
 

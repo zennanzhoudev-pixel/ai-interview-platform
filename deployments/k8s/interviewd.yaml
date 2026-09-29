@@ -1,0 +1,175 @@
+# 生产部署清单(Kustomize/Helm 之前的"最小可读版本")。
+#
+# 三个刻意的设计:
+#
+#   1. **面试服务与判题沙箱分开**: 面试服务是无状态的、能随便扩容;
+#      判题执行器需要有容器运行时权限, 而且会跑不可信代码。把两者
+#      混在一个 Deployment 里, 等于让"能执行任意代码"这件事发生在
+#      承载所有租户会话的进程旁边。
+#   2. **长连接的排水时间必须够长**: terminationGracePeriodSeconds
+#      与 preStop sleep 都设成 120 秒 —— 面试是 45 分钟的长连接,
+#      滚动更新时如果 30 秒就把 Pod 摘掉, 正在面试的人会直接掉线。
+#   3. **探针分开**: /healthz 表示进程活着, /readyz 表示存储可用。
+#      只在后者失败时摘流量, 避免数据库抖动导致整批 Pod 被重启。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: interview
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: interviewd
+  namespace: interview
+  labels: { app: interviewd }
+spec:
+  selector: { app: interviewd }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  # 面试是长连接, 会话保持由网关按 cookie 或 consistent hash 完成,
+  # 这里保持 ClusterIP 默认行为即可。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: interviewd
+  namespace: interview
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels: { app: interviewd }
+  template:
+    metadata:
+      labels: { app: interviewd }
+    spec:
+      # 面试服务的进程本身就是不可信代码(判题)的邻居, 因此禁止提权、
+      # 丢弃全部 capability、只读根文件系统。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: interviewd
+          image: ghcr.io/example/ai-interview-platform:latest
+          args:
+            - "-serve"
+            - ":8080"
+            - "-recording-dir"
+            - "/data/recordings"
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - name: APP_SECRET
+              valueFrom: { secretKeyRef: { name: interviewd-secrets, key: app-secret } }
+            - name: MYSQL_DSN
+              valueFrom: { secretKeyRef: { name: interviewd-secrets, key: mysql-dsn } }
+            - name: REDIS_ADDR
+              value: "redis-master.interview.svc.cluster.local:6379"
+            - name: OTLP_ENDPOINT
+              value: "otel-collector.observability.svc.cluster.local:4318"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: RECORDING_RETENTION_DAYS
+              value: "90"
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            failureThreshold: 30
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: recordings, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: recordings
+          persistentVolumeClaim: { claimName: interview-recordings }
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: interview-recordings
+  namespace: interview
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests: { storage: 200Gi }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: interviewd
+  namespace: interview
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: interviewd
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+  behavior:
+    scaleDown:
+      # 面试开始后不能立刻缩容: 一个 Pod 上可能挂着几十条进行中的长连接。
+      stabilizationWindowSeconds: 600
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: interviewd
+  namespace: interview
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: interviewd }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: interviewd
+  namespace: interview
+  annotations:
+    # WebSocket 与长连接是这里的核心诉求: 缓冲关掉、超时拉长,
+    # 否则 AI 的语音会被网关攒着一起发, 追问就会"结巴"。
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+spec:
+  rules:
+    - host: interview.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: interviewd
+                port: { name: http }

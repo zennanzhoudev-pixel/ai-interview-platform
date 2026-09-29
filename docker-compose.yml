@@ -2,6 +2,33 @@
 version: "3.9"
 
 services:
+  # 面试服务本体。
+  #
+  # 它被放在 compose 里而不是只跑"依赖", 因为本地起一套完整环境
+  # (含 MySQL / Redis / 录制存储) 才是最容易复现线上问题的方式。
+  interviewd:
+    build: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      MYSQL_DSN: "root:root@tcp(mysql:3306)/interview?parseTime=true&loc=UTC"
+      REDIS_ADDR: "redis:6379"
+      # 生产必须换成稳定密钥: 换掉它会让所有已发出的候选人链接失效。
+      APP_SECRET: "local-dev-secret-change-me"
+      TENANT_ID: "default"
+      RECORDING_DIR: "/data/recordings"
+      RECORDING_RETENTION_DAYS: "90"
+      # 沙箱: 容器内没有 docker, 因此本机执行(仅本地开发)。
+      # 生产请用 deployments/k8s 里的独立判题执行器。
+      SANDBOX_ENGINE: "local"
+      OTLP_ENDPOINT: "jaeger:4318"
+      LOG_FORMAT: "json"
+    ports: ["8080:8080"]
+    volumes: ["recording-data:/data"]
+
   mysql:
     image: mysql:8.0
     environment:
@@ -69,3 +96,4 @@ volumes:
   redis-data:
   es-data:
   kafka-data:
+  recording-data:

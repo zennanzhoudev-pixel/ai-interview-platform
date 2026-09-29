@@ -1,20 +1,22 @@
-// Command interviewd 是面试编排引擎的离线模拟入口。
+// Command interviewd 既是面试服务的入口, 也是编排引擎的离线模拟器。
 //
-// 它用脚本化的候选人回答完整跑一场文本面试, 打印可读成绩单, 并可选输出 JSON 报告。
-// 整条链路不依赖 ASR / LLM / 数据库, 所以可以直接放进 CI 做回归:
-// 评分策略、追问逻辑、预算调度一旦被改坏, 跑一次就能发现。
-//
-// 真实部署时, 这里的 scriptedAnswer 换成流式 ASR 的输出,
-// scoring.Scorer 换成大模型评分器, Engine 保持不变。
+// 三种运行模式:
+//   - 离线模拟(默认): 用脚本化回答跑完一场文本面试, 不依赖 ASR/LLM/数据库,
+//     可以直接放进 CI 做回归;
+//   - Web 服务(-serve): 起 HTTP/WebSocket 服务, 提供面试、报告、看板等接口;
+//   - 联调自检(-selftest): 开面之前先 ping 一遍上游, 而不是让第一场面试替你冒烟。
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,10 +27,16 @@ import (
 	"time"
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/auth"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/knowledge"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/llm"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/observability"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/platform"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/recording"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/sandbox"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 )
@@ -43,31 +51,72 @@ func main() {
 	mysqlDSN := flag.String("mysql-dsn", os.Getenv("MYSQL_DSN"), "MySQL DSN; 留空使用内存存储")
 	redisAddr := flag.String("redis-addr", os.Getenv("REDIS_ADDR"), "Redis 地址; 留空则不启用会话快照")
 	selftest := flag.Bool("selftest", false, "联调自检: 探测已配置的 LLM/TTS/Embedding 是否可用")
+	requireAuth := flag.Bool("require-auth", os.Getenv("MYSQL_DSN") != "",
+		"强制 API Key 鉴权(默认: 配置了 MySQL 时开启; 内存演示模式下关闭)")
+	appSecret := flag.String("app-secret", os.Getenv("APP_SECRET"),
+		"会话令牌签名密钥; 开启鉴权时必填")
+	tenantID := flag.String("tenant", defaultEnv("TENANT_ID", "default"), "默认租户 ID")
+	otlpEndpoint := flag.String("otlp-endpoint", os.Getenv("OTLP_ENDPOINT"),
+		"OTLP/HTTP 追踪接收地址(如 127.0.0.1:4318); 留空则关闭追踪导出")
+	recordingDir := flag.String("recording-dir", defaultEnv("RECORDING_DIR", "data/recordings"),
+		"面试录制件落盘目录; 设为 off 关闭录制功能")
+	sandboxEngine := flag.String("sandbox-engine", defaultEnv("SANDBOX_ENGINE", "auto"),
+		"判题沙箱引擎: auto/docker/local; local 不具备隔离能力, 仅限本地开发")
+	iceServers := flag.String("ice-servers", os.Getenv("ICE_SERVERS"),
+		"WebRTC ICE 服务器, 逗号分隔(如 stun:stun.example.com:3478,turn:turn.example.com:3478)")
+	retentionDays := flag.Int("retention-days", envInt("RECORDING_RETENTION_DAYS", 90),
+		"面试录制件保留天数, 到期后由清理任务删除")
+	healthcheck := flag.String("healthcheck", "",
+		"容器健康检查模式: 传入一个 URL, 探测成功则退出码 0")
+	logLevel := flag.String("log-level", defaultEnv("LOG_LEVEL", "info"), "日志级别 debug/info/warn/error")
+	logFormat := flag.String("log-format", defaultEnv("LOG_FORMAT", "text"), "日志格式 text/json")
 	flag.Parse()
 
+	cliLogger := log.New(os.Stderr, "[interviewd] ", log.LstdFlags)
+
+	// distroless 镜像里没有 shell、没有 curl, 因此健康检查必须由二进制
+	// 自己完成 —— 否则要么放弃健康检查, 要么为了让探针能跑而塞进一个
+	// 完整的操作系统镜像, 那等于把攻击面又还回去。
+	if *healthcheck != "" {
+		runHealthcheck(*healthcheck)
+		return
+	}
+
 	if *selftest {
-		runSelfTest(log.New(os.Stderr, "[interviewd] ", log.LstdFlags))
+		runSelfTest(cliLogger)
 		return
 	}
 
 	if *serve != "" {
-		if err := runServer(*serve, *mysqlDSN, *redisAddr); err != nil {
+		if err := runServer(serverOptions{
+			addr: *serve, mysqlDSN: *mysqlDSN, redisAddr: *redisAddr,
+			requireAuth: *requireAuth, appSecret: *appSecret, tenantID: *tenantID,
+			otlpEndpoint: *otlpEndpoint, logLevel: *logLevel, logFormat: *logFormat,
+			recordingDir: *recordingDir, sandboxEngine: *sandboxEngine,
+			iceServers: *iceServers, retentionDays: *retentionDays,
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	total := time.Duration(*minutes) * time.Minute
+	runSimulation(*round, *minutes, *maxTurns, *out, *strict)
+}
+
+/* ---------------- 离线模拟 ---------------- */
+
+func runSimulation(round, minutes, maxTurns int, out string, strict bool) {
+	total := time.Duration(minutes) * time.Minute
 	plan := orchestrator.DefaultPlan(total)
-	plan.Round = *round
+	plan.Round = round
 	bank := orchestrator.DefaultBank()
 
 	// 复核模型的严格度。默认与主模型一致(演示正常链路);
 	// -strict 让复核模型整体保守一级, 用来观察"双模型分歧"如何进入报告。
 	// 分歧超过容忍度时的三方仲裁由 internal/scoring 的单元测试覆盖。
 	reviewBias := 0
-	if *strict {
+	if strict {
 		reviewBias = -1
 	}
 
@@ -82,12 +131,12 @@ func main() {
 
 	fmt.Println("AI 线上面试中台 · 编排引擎模拟")
 	fmt.Printf("第 %d 面 | 时长预算 %d 分钟 | 题库 %d 题 | 阶段 %d 个\n",
-		*round, *minutes, bank.Size(), len(plan.Specs))
+		round, minutes, bank.Size(), len(plan.Specs))
 	fmt.Println(strings.Repeat("-", 72))
 
 	prevStage := orchestrator.Stage("")
 	decision := engine.Start()
-	for i := 0; i < *maxTurns; i++ {
+	for i := 0; i < maxTurns; i++ {
 		if decision.Action == orchestrator.ActionFinish {
 			break
 		}
@@ -95,7 +144,6 @@ func main() {
 			fmt.Printf("\n[阶段] %s\n", decision.Stage)
 			prevStage = decision.Stage
 		}
-
 		label := "面试官"
 		if decision.IsProbe {
 			label = "追问  "
@@ -116,13 +164,12 @@ func main() {
 
 	report := engine.Report()
 	printScorecard(report)
-
-	if *out != "" {
-		if err := writeReport(*out, report); err != nil {
+	if out != "" {
+		if err := writeReport(out, report); err != nil {
 			fmt.Fprintf(os.Stderr, "写出报告失败: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("\n报告已写入 %s\n", *out)
+		fmt.Printf("\n报告已写入 %s\n", out)
 	}
 }
 
@@ -146,7 +193,6 @@ func printScorecard(rep orchestrator.Report) {
 			fmt.Printf("      待确认要点: %s\n", strings.Join(d.Concerns, " / "))
 		}
 	}
-
 	if len(rep.Gaps) > 0 {
 		fmt.Printf("\n  未覆盖能力项: %s\n", strings.Join(rep.Gaps, " / "))
 	}
@@ -155,13 +201,14 @@ func printScorecard(rep orchestrator.Report) {
 	fmt.Println("质量与过程指标")
 	fmt.Printf("  问答 %d 轮 | 计分 %d 轮 | 追问 %d 轮 | 最大追问深度 %d\n",
 		rep.Stats.Turns, rep.Stats.ScoredTurns, rep.Stats.Probes, rep.Stats.MaxProbeDepth)
-	fmt.Printf("  双模型分歧 %d 条 | 三方仲裁 %d 条 | 转人工复核 %d 条\n",
-		rep.Stats.Disagreements, rep.Stats.Arbitrations, rep.Stats.HumanReviewItems)
+	fmt.Printf("  双模型分歧 %d 条 | 三方仲裁 %d 条 | 转人工复核 %d 条 | 降级 %d 条\n",
+		rep.Stats.Disagreements, rep.Stats.Arbitrations, rep.Stats.HumanReviewItems, rep.Stats.Degraded)
 	fmt.Printf("  平均置信度 %.2f | 耗时 %ds / 预算 %ds\n",
 		rep.Stats.AvgConfidence, rep.DurationSec, rep.BudgetSec)
 
 	fmt.Println(strings.Repeat("-", 72))
-	fmt.Printf("结论: %s (置信度 %.2f)\n", rep.Recommendation, rep.Confidence)
+	fmt.Printf("结论: %s (综合分 %d, 置信度 %.2f)\n",
+		rep.Recommendation, rep.Score, rep.Confidence)
 	for _, f := range rep.Flags {
 		fmt.Printf("  风险提示: %s\n", f)
 	}
@@ -187,10 +234,6 @@ type canned struct {
 	took time.Duration
 }
 
-// rootAnswers 是"主问题"的脚本化回答。
-//
-// 注意这些回答是刻意设计过的: 有的只差一个要点, 有的几乎全中,
-// 用来观察引擎在不同质量回答下的追问行为。
 var rootAnswers = map[string]canned{
 	"q_greet": {
 		text: "面试官好, 我是主攻 Go 后端方向的候选人。最近一年在做 IM 对话平台, 主要负责 Redis 存储改造和分布式任务调度两块, 另外自己做过一个 AI-Ops 运维 Agent 平台。",
@@ -251,20 +294,16 @@ func scriptedAnswer(questionID string) (string, time.Duration) {
 	if a, ok := rootAnswers[questionID]; ok {
 		return a.text, a.took
 	}
-
 	root, depth := splitProbeID(questionID)
 	if depth > 0 {
 		if list, ok := probeAnswers[root]; ok && depth-1 < len(list) {
 			return list[depth-1].text, list[depth-1].took
 		}
-		// 追问也答不到要点: 引擎应该在最大深度处停下并换题,
-		// 而不是无限深挖同一个点。
 		return "这个……当时没深究, 主要是先保证功能可用, 细节确实记不太清了。", 40 * time.Second
 	}
 	return "这块我了解一些, 具体实现是照着文档做的。", 60 * time.Second
 }
 
-// splitProbeID 把 "q_resume_zset.p2" 拆成 ("q_resume_zset", 2)。
 func splitProbeID(id string) (string, int) {
 	i := strings.LastIndex(id, ".p")
 	if i < 0 {
@@ -285,49 +324,194 @@ func truncate(s string, maxRunes int) string {
 	return string(rs[:maxRunes]) + "..."
 }
 
+func defaultEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envInt 读取整数环境变量, 非法或缺失时用默认值。
+func envInt(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// runHealthcheck 探测一个 URL, 用于容器 HEALTHCHECK。
+//
+// 只接受 http/https, 并且超时固定 3 秒: 健康检查本身不能变成一个新的
+// 故障点(例如 DNS 卡住导致探针永远挂着)。
+func runHealthcheck(rawURL string) {
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		fmt.Fprintln(os.Stderr, "healthcheck: 只支持 http/https URL")
+		os.Exit(2)
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		fmt.Fprintf(os.Stderr, "healthcheck: 状态码 %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+}
+
+/* ---------------- Web 服务 ---------------- */
+
+type serverOptions struct {
+	addr          string
+	mysqlDSN      string
+	redisAddr     string
+	requireAuth   bool
+	appSecret     string
+	tenantID      string
+	otlpEndpoint  string
+	logLevel      string
+	logFormat     string
+	recordingDir  string
+	sandboxEngine string
+	iceServers    string
+	retentionDays int
+}
+
 // runServer 启动 Web 服务。
 //
 // 存储与评分器都是"可选增强": 没有 MySQL 就用内存, 没有 Redis 就跳过快照,
-// 没有大模型就用规则评分。这样在一台干净的机器上
-// `go run ./cmd/interviewd -serve :8080` 就能跑起完整流程,
-// 而不是先让人去配一堆中间件 —— 后者通常会变成
-// "项目看起来不错, 但从没真正跑起来过"。
-func runServer(addr, mysqlDSN, redisAddr string) error {
-	logger := log.New(os.Stderr, "[interviewd] ", log.LstdFlags)
+// 没有大模型就用规则评分。这样在一台干净机器上 `-serve :8080` 就能跑起完整流程,
+// 而不是先让人去配一堆中间件 —— 后者通常会变成"项目看起来不错, 但从没跑起来过"。
+func runServer(opts serverOptions) error {
+	cliLogger := log.New(os.Stderr, "[interviewd] ", log.LstdFlags)
+	logger := platform.NewLogger(platform.LogConfig{Level: opts.logLevel, Format: opts.logFormat})
+	slog.SetDefault(logger)
 
-	sessionStore, closeStore, err := openStore(mysqlDSN, logger)
+	// 语音链路的 goroutine 也要有 panic 兜底; 把它接到日志与指标上。
+	media.SetPanicLogger(logger)
+
+	metrics := observability.NewMetrics()
+	media.SetPanicHook(func(string) { metrics.Panics.WithLabelValues("media.goroutine").Inc() })
+
+	// 链路追踪: 未配置端点时退化为 no-op, 调用方代码零改动。
+	shutdownTracing, _, err := observability.InitTracing(context.Background(), observability.TraceConfig{
+		ServiceName: "interviewd",
+		Endpoint:    opts.otlpEndpoint,
+		Insecure:    true,
+		SampleRatio: 1,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+	if opts.otlpEndpoint == "" {
+		logger.Info("未配置 OTLP 端点, 链路追踪已关闭")
+	} else {
+		logger.Info("链路追踪已启用", slog.String("endpoint", opts.otlpEndpoint))
+	}
+
+	sessionStore, closeStore, err := openStore(opts.mysqlDSN, cliLogger)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
 
-	ckpt, err := openCheckpoint(redisAddr, logger)
+	ckpt, err := openCheckpoint(opts.redisAddr, cliLogger)
 	if err != nil {
 		return err
 	}
 
-	scorerFactory, err := buildScorerFactory(logger)
+	// 签名密钥: 开启鉴权时必须有稳定密钥, 否则重启后所有候选人令牌失效、
+	// 候选人假名引用全部改变。这种情况宁可启动失败, 也不能默默用临时密钥跑。
+	secret := []byte(opts.appSecret)
+	if opts.requireAuth && len(secret) == 0 {
+		return errors.New("开启鉴权时必须通过 -app-secret 或 APP_SECRET 指定签名密钥")
+	}
+	if len(secret) == 0 {
+		secret = randomSecret()
+		logger.Warn("演示模式: 使用临时签名密钥, 重启后已发出的候选人链接会失效")
+	}
+
+	keys, err := openKeyStore(sessionStore, opts.requireAuth, opts.tenantID, cliLogger)
 	if err != nil {
 		return err
 	}
-	planner, err := buildProbePlanner(logger)
+	if !opts.requireAuth {
+		logger.Warn("鉴权已关闭(演示模式): 任何调用方都能读取本租户的数据。" +
+			"生产环境请配置 MYSQL_DSN 并设置 APP_SECRET, 或显式开启 -require-auth")
+	}
+
+	scorerFactory, err := buildScorerFactory(cliLogger)
 	if err != nil {
 		return err
 	}
-	asr, tts := buildMediaProviders(logger)
+	// 知识库: 提问、追问、检索可视化三者共用同一份索引。
+	// 题库改动能立刻生效(rebuild 在请求内同步完成)。
+	corpus, embedder, err := buildKnowledge(context.Background(), sessionStore, opts.tenantID, cliLogger)
+	if err != nil {
+		return err
+	}
+	asr, tts := buildMediaProviders(cliLogger)
+
+	// 判题沙箱: 有容器运行时就用容器, 否则降级到本机并显式告警。
+	runner := sandbox.AutoRunner(context.Background(), opts.sandboxEngine, func(msg string) {
+		logger.Warn(msg)
+	})
+	if runner.Isolated() {
+		logger.Info("判题沙箱已启用", slog.String("engine", runner.Name()), slog.Bool("isolated", true))
+	} else {
+		logger.Warn("判题沙箱运行在非隔离模式, 只能用于本地开发",
+			slog.String("engine", runner.Name()))
+	}
+
+	// 录制存储: 简历原文与面试录像是最敏感的两类数据, 都有保留期。
+	var blobs recording.BlobStore
+	if strings.EqualFold(strings.TrimSpace(opts.recordingDir), "off") {
+		logger.Warn("面试录制已关闭(-recording-dir=off): 候选人界面上不会出现录制开关")
+	} else {
+		fs, err := recording.NewFSStore(opts.recordingDir)
+		if err != nil {
+			return err
+		}
+		blobs = fs
+		logger.Info("面试录制已启用",
+			slog.String("dir", fs.Root()), slog.Int("retention_days", opts.retentionDays))
+	}
 
 	srv := api.NewServer(api.Config{
 		Store:        sessionStore,
 		Checkpoint:   ckpt,
+		Keys:         keys,
+		Secret:       secret,
 		Scorers:      scorerFactory,
-		ProbePlanner: planner,
+		ProbePlanner: corpus.Planner(),
 		ASR:          asr,
 		TTS:          tts,
-		Logger:       logger,
+		KnowledgeFor: func(ctx context.Context, tenant string) (*knowledge.Corpus, error) {
+			next, _, err := buildKnowledge(ctx, sessionStore, tenant, cliLogger)
+			return next, err
+		},
+		Sandbox:            runner,
+		Blobs:              blobs,
+		RecordingRetention: time.Duration(opts.retentionDays) * 24 * time.Hour,
+		ICEServers:         parseICEServers(opts.iceServers),
+		Pingers:            buildPingers(tts, asr, embedder, llm.FromEnv()),
+		StoreKind:          storeKind(sessionStore),
+		Logger:             logger,
+		Metrics:            metrics,
+		TenantID:           opts.tenantID,
+		RequireAuth:        opts.requireAuth,
 	})
 
 	httpSrv := &http.Server{
-		Addr:              addr,
+		Addr:              opts.addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// 写超时留空: 面试是长连接场景, 设了写超时会把长面试从服务端切断。
@@ -337,24 +521,64 @@ func runServer(addr, mysqlDSN, redisAddr string) error {
 	defer stop()
 	go func() {
 		<-ctx.Done()
-		logger.Print("收到退出信号, 正在优雅关闭(等待在途面试结束)…")
+		logger.Info("收到退出信号, 正在优雅关闭(等待在途面试结束)")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
 		// 长连接会让 Shutdown 一直等到面试结束, 因此必须有上限。
-		// 生产环境还应主动向客户端广播"服务即将重启", 让前端立刻重连 ——
-		// 重连后会自动从已落库的问答恢复进度, 候选人几乎无感。
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			logger.Printf("优雅关闭超时, 强制退出: %v", err)
+			logger.Error("优雅关闭超时, 强制退出", slog.Any("err", err))
 		}
 	}()
 
-	logger.Printf("面试服务已启动: http://localhost%s", addr)
+	logger.Info("面试服务已启动",
+		slog.String("url", "http://localhost"+opts.addr),
+		slog.String("tenant", opts.tenantID),
+		slog.Bool("require_auth", opts.requireAuth))
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	logger.Print("已停止")
+	logger.Info("已停止")
 	return nil
+}
+
+// openKeyStore 构造 API Key 库。首次启用鉴权且没有任何密钥时,
+// 引导一个 admin 密钥并打印一次 —— 否则没人能调用管理接口。
+func openKeyStore(sessionStore store.SessionStore, requireAuth bool, tenantID string, logger *log.Logger) (auth.KeyStore, error) {
+	var ks auth.KeyStore
+	if my, ok := sessionStore.(*store.MySQLStore); ok {
+		myKS := auth.NewMySQLKeyStore(my.DB())
+		count, err := myKS.CountForTenant(tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if requireAuth && count == 0 {
+			raw, _, err := myKS.Add(tenantID, "引导密钥(请尽快吊销并换成正式密钥)", auth.RoleAdmin)
+			if err != nil {
+				return nil, err
+			}
+			logger.Printf("已生成引导用 API Key(仅显示这一次): %s", raw)
+		} else if count > 0 {
+			logger.Printf("已加载 %d 个 API Key", count)
+		}
+		ks = myKS
+	} else {
+		mem := auth.NewMemoryKeyStore()
+		if requireAuth {
+			raw, _, err := mem.Add(tenantID, "引导密钥", auth.RoleAdmin)
+			if err != nil {
+				return nil, err
+			}
+			logger.Printf("内存密钥库已生成引导用 API Key(仅显示这一次): %s", raw)
+		}
+		ks = mem
+	}
+	return ks, nil
+}
+
+func randomSecret() []byte {
+	buf := make([]byte, 32)
+	_, _ = rand.Read(buf)
+	return []byte(hex.EncodeToString(buf))
 }
 
 func openStore(mysqlDSN string, logger *log.Logger) (store.SessionStore, func(), error) {
@@ -362,7 +586,6 @@ func openStore(mysqlDSN string, logger *log.Logger) (store.SessionStore, func(),
 		logger.Print("未配置 MYSQL_DSN, 使用内存存储(重启后数据丢失, 仅适合本地演示)")
 		return store.NewMemoryStore(), func() {}, nil
 	}
-
 	my, err := store.OpenMySQL(mysqlDSN)
 	if err != nil {
 		return nil, nil, err
@@ -384,7 +607,6 @@ func openCheckpoint(redisAddr string, logger *log.Logger) (store.CheckpointStore
 		logger.Print("未配置 REDIS_ADDR, 会话快照已禁用(断线重连仍然可用)")
 		return nil, nil
 	}
-
 	client := store.NewRedisClient(redisAddr, os.Getenv("REDIS_PASSWORD"), 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -424,8 +646,7 @@ func buildScorerFactory(logger *log.Logger) (func() api.Scorers, error) {
 		)
 		logger.Printf("主评分模型 %s, 复核模型 %s", cfg.Model, modelB)
 	} else {
-		logger.Printf("主评分模型 %s, 复核使用规则评分器(设置 LLM_MODEL_B 可启用双模型交叉)",
-			cfg.Model)
+		logger.Printf("主评分模型 %s, 复核使用规则评分器(设置 LLM_MODEL_B 可启用双模型交叉)", cfg.Model)
 	}
 
 	return func() api.Scorers {
@@ -441,52 +662,88 @@ func buildScorerFactory(logger *log.Logger) (func() api.Scorers, error) {
 // buildProbePlanner 构造检索驱动的追问规划器。
 //
 // 默认用本地特征哈希嵌入(词面相似度, 无需密钥); 配了 EMBEDDING_API_KEY
-// 后换成 OpenAI 兼容的语义嵌入。检索管道(BM25 + 向量 + RRF + 精排)不变,
-// 换的只是向量质量。
-func buildProbePlanner(logger *log.Logger) (orchestrator.ProbePlanner, error) {
-	bank := orchestrator.DefaultReferenceBank()
+// 后换成 OpenAI 兼容的语义嵌入。检索管道(BM25 + 向量 + RRF + 精排)不变。
+// buildKnowledge 从数据库里的题库 + 内置题库构造知识库。
+//
+// 返回的 Corpus 同时供三处使用: 抽题(引擎)、追问(规划器)、检索(接口)。
+// 另外返回 embedding 实现, 供系统自检页探测向量链路是否真的通。
+func buildKnowledge(ctx context.Context, sessionStore store.SessionStore, tenant string, logger *log.Logger) (*knowledge.Corpus, rag.Embedder, error) {
+	// 题库读取失败不应阻断开面: 内置题库已经能撑起一场完整面试,
+	// 而"数据库里暂时读不到自定义题目"不应该变成"服务起不来"。
+	items, err := sessionStore.ListQuestions(ctx, tenant)
+	if err != nil {
+		logger.Printf("读取租户题库失败(%v), 本次仅使用内置题库", err)
+		items = nil
+	}
 
 	var emb rag.Embedder = rag.NewHashingEmbedder(256)
 	if key := os.Getenv("EMBEDDING_API_KEY"); key != "" {
-		emb = rag.NewOpenAIEmbedder(
-			os.Getenv("EMBEDDING_BASE_URL"),
-			key,
-			os.Getenv("EMBEDDING_MODEL"),
-		)
+		emb = rag.NewOpenAIEmbedder(os.Getenv("EMBEDDING_BASE_URL"), key, os.Getenv("EMBEDDING_MODEL"))
 		logger.Print("检索向量使用 OpenAI 兼容嵌入模型(语义召回)")
 	} else {
 		logger.Print("未配置 EMBEDDING_API_KEY, 检索向量使用本地特征哈希(词面相似度)")
 	}
 
-	retriever, err := bank.BuildRetriever(context.Background(), emb, rag.NewLocalReranker())
+	corpus, err := knowledge.Build(ctx, items, emb, rag.NewLocalReranker())
 	if err != nil {
-		return nil, fmt.Errorf("构建参考题库检索器失败: %w", err)
+		return nil, nil, fmt.Errorf("构建知识库失败: %w", err)
 	}
-	return orchestrator.NewRAGProbePlanner(bank, retriever), nil
+	stats := corpus.Stats()
+	logger.Printf("知识库就绪: %d 道题 / %d 条参考要点 / %d 篇检索文档 (%s, %s)",
+		stats.Questions, stats.Points, stats.Documents, stats.Source, stats.Embedder)
+	if missing := corpus.MissingStructuralStages(); len(missing) > 0 {
+		logger.Printf("警告: 以下阶段缺少题目, 面试会跳过它们: %v", missing)
+	}
+	return corpus, emb, nil
+}
+
+// parseICEServers 解析逗号分隔的 ICE 服务器列表。
+//
+// STUN/TURN 地址因部署环境而异, 因此必须可配置。默认给一个公共 STUN,
+// 让本地演示也能建立 P2P 视频; 生产应当换成自己的 TURN —— 公共 STUN
+// 在有企业防火墙的环境里大概率不通。
+func parseICEServers(raw string) []map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var urls []string
+	for _, part := range strings.Split(raw, ",") {
+		if u := strings.TrimSpace(part); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	return []map[string]any{{"urls": urls}}
+}
+
+// storeKind 返回存储后端的展示名。
+func storeKind(sessionStore store.SessionStore) string {
+	if _, ok := sessionStore.(*store.MySQLStore); ok {
+		return "MySQL"
+	}
+	return "内存(重启丢数据, 仅本地演示)"
 }
 
 // buildMediaProviders 从环境变量组装语音识别与合成提供方。
 //
 // 语音模式是"显式 opt-in": 只有配了真实密钥才启用服务端 ASR/TTS,
-// 否则前端回落到浏览器自带的识别与合成。既不会把不存在的语音能力假装成
-// 可用, 也不会让只想跑文字版的人被一堆密钥挡住。
+// 否则前端回落到浏览器自带的识别与合成。
 func buildMediaProviders(logger *log.Logger) (media.ASRProvider, media.TTSProvider) {
 	var asr media.ASRProvider
 	var tts media.TTSProvider
 
 	if key := os.Getenv("ASR_API_KEY"); key != "" {
 		asr = &media.OpenAIASR{
-			BaseURL: os.Getenv("ASR_BASE_URL"),
-			APIKey:  key,
-			Model:   os.Getenv("ASR_MODEL"),
+			BaseURL: os.Getenv("ASR_BASE_URL"), APIKey: key, Model: os.Getenv("ASR_MODEL"),
 		}
 		logger.Print("语音识别已启用(OpenAI 兼容 /audio/transcriptions)")
 	}
 	if key := os.Getenv("TTS_API_KEY"); key != "" {
 		tts = &media.OpenAITTS{
-			BaseURL: os.Getenv("TTS_BASE_URL"),
-			APIKey:  key,
-			Model:   os.Getenv("TTS_MODEL"),
+			BaseURL: os.Getenv("TTS_BASE_URL"), APIKey: key, Model: os.Getenv("TTS_MODEL"),
 		}
 		logger.Print("语音合成已启用(OpenAI 兼容 /audio/speech)")
 	}

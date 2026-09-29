@@ -125,7 +125,7 @@ func NewSession(root context.Context, asr ASRProvider, tts TTSProvider, cfg Sess
 		root:       ctx,
 		rootCancel: cancel,
 	}
-	go s.pump()
+	safeGo(ctx, "media.pump", s.pump)
 	return s
 }
 
@@ -396,7 +396,7 @@ func (s *Session) startListening() {
 	s.listening = lt
 	s.mu.Unlock()
 
-	go s.consumeASR(lt)
+	safeGo(s.root, "media.consume_asr", func() { s.consumeASR(lt) })
 }
 
 func (s *Session) closeListening() {

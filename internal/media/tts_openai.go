@@ -76,7 +76,7 @@ func (p *OpenAITTS) Speak(ctx context.Context, text string, voice Voice) (TTSStr
 		ch:         make(chan AudioChunk, 8),
 		chunkBytes: p.chunkBytes(),
 	}
-	go stream.run()
+	safeGo(streamCtx, "media.openai_tts", stream.run)
 	return stream, nil
 }
 

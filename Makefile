@@ -1,4 +1,4 @@
-.PHONY: help run serve test test-race test-mysql vet fmt tidy build docker-up docker-down clean
+.PHONY: help run serve selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
 
 GO ?= go
 BIN := bin/interviewd
@@ -12,6 +12,9 @@ run: ## 本地跑一场模拟文本面试, 输出面试报告 JSON
 serve: ## 启动 Web 服务(浏览器打开 http://localhost:8080)
 	$(GO) run ./cmd/interviewd -serve :8080
 
+selftest: ## 联调自检: 探测已配置的 LLM / ASR / TTS / Embedding 是否真的可用
+	$(GO) run ./cmd/interviewd -selftest
+
 test: ## 跑单元测试
 	$(GO) test ./... -count=1
 
@@ -24,6 +27,18 @@ test-mysql: ## 跑 MySQL 集成测试(需要先 docker compose up mysql)
 
 vet: ## 静态检查
 	$(GO) vet ./...
+
+lint: ## 更严格的静态检查(需要 golangci-lint)
+	golangci-lint run ./...
+
+frontend-check: ## 前端模块语法检查(没有构建步骤, 因此需要显式校验)
+	@mkdir -p /tmp/jscheck-ai-interview
+	@for f in web/js/*.js; do cp "$$f" "/tmp/jscheck-ai-interview/$$(basename $$f .js).mjs"; done
+	@for f in /tmp/jscheck-ai-interview/*.mjs; do node --check "$$f"; done
+	@echo "前端模块语法检查通过"
+
+loadtest: ## 并发压测: 同时开 10 场完整面试
+	node deployments/loadtest.mjs --base http://localhost:8080 --sessions 10
 
 fmt: ## 格式化
 	$(GO) fmt ./...

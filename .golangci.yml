@@ -1,0 +1,44 @@
+# golangci-lint 配置。
+#
+# 只开"能拦住真实缺陷"的 linter, 不追求规则数量:
+# 规则一多, 团队就会开始写 //nolint, 于是静态检查变成装饰。
+linters:
+  disable-all: true
+  enable:
+    - errcheck      # 忽略错误返回值是最常见的"看起来没问题"
+    - govet
+    - ineffassign   # 赋值后没用, 通常意味着逻辑写漏了
+    - staticcheck   # 包含一批能直接定位 bug 的检查
+    - unused
+    - bodyclose     # HTTP 响应体没关, 连接池会慢慢耗尽
+    - contextcheck  # context 没有沿着调用链传下去
+    - noctx         # 发起 HTTP 请求不带 context, 无法取消
+    - rowserrcheck  # sql.Rows.Err() 没检查, 会静默丢数据
+    - sqlclosecheck
+    - errorlint     # 用 == 比较 error 而不是 errors.Is
+    - gosec         # 安全问题(弱随机数、文件权限等)
+    - misspell
+    - unconvert
+    - whitespace
+
+linters-settings:
+  errcheck:
+    # 明确忽略的返回值要写出来, 而不是靠排除整个函数。
+    exclude-functions:
+      - (*os.File).Close
+      - (io.Closer).Close
+  gosec:
+    excludes:
+      - G404 # 使用了 math/rand: 本项目只用于生成会话 ID 后缀, 不是安全场景
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # 测试代码允许更宽松: 断言里的错误处理往往会淹没真正的用例意图。
+    - path: _test\.go
+      linters: [errcheck, gosec, noctx, bodyclose]
+
+run:
+  timeout: 5m
+  tests: true

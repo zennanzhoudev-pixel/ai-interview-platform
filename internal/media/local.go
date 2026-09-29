@@ -141,7 +141,7 @@ func (p *LocalTTS) Speak(ctx context.Context, text string, voice Voice) (TTSStre
 		realtime: p.Realtime,
 		ch:       make(chan AudioChunk, 8),
 	}
-	go stream.run()
+	safeGo(ctx, "media.local_tts", stream.run)
 	return stream, nil
 }
 

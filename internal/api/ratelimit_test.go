@@ -88,7 +88,7 @@ func TestRateLimitMiddlewareReturns429(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	first, err := http.Get(ts.URL + "/api/v1/health")
+	first, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
 		t.Fatalf("首次请求失败: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestRateLimitMiddlewareReturns429(t *testing.T) {
 		t.Fatalf("首次请求应通过, 实际 %d", first.StatusCode)
 	}
 
-	second, err := http.Get(ts.URL + "/api/v1/health")
+	second, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
 		t.Fatalf("第二次请求失败: %v", err)
 	}

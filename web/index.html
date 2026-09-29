@@ -3,330 +3,57 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
   <title>AI Interview OS · 线上面试中台</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- 页面骨架只有导航与一个挂载点:
+       所有视图由 /js/app.js 里的路由渲染。这样做的理由是面试间、
+       工作台、管理台共享同一套导航与状态, 用静态 HTML 复制三份外壳
+       迟早会出现"改了一处忘了另一处"。 -->
   <header class="nav">
     <div class="nav-left">
-      <button class="logo" id="navHome" title="回到候选人空间">
+      <button class="logo" id="navHome" title="回到首页" onclick="location.hash='/about'">
         <span class="logo-mark">OS</span>
         <span class="logo-text">AI Interview OS</span>
       </button>
     </div>
-    <nav class="nav-center" id="navLinks">
-      <button data-view="overview" class="nav-link is-active">概览</button>
-      <button data-view="prep" class="nav-link">面试</button>
-      <button data-view="report" class="nav-link">报告</button>
-      <button data-view="profile" class="nav-link">个人资料</button>
-    </nav>
+    <nav class="nav-center" id="navLinks"></nav>
     <div class="nav-right">
       <span class="pill warn" id="serviceStatus" hidden><i></i>服务未连接</span>
-      <button class="nav-link ghost" id="navAbout">产品介绍</button>
+      <span id="shellSwitch"></span>
+      <button class="nav-link ghost" onclick="location.hash='/about'">产品介绍</button>
       <div class="avatar-wrap">
         <button class="avatar-btn" id="avatarBtn" aria-haspopup="menu" aria-expanded="false" title="账户与设置">
-          <span class="avatar" id="navAvatar">陈</span>
+          <span class="avatar" id="navAvatar">访</span>
         </button>
         <div class="menu" id="avatarMenu" hidden role="menu">
           <div class="menu-head">
-            <strong id="menuName">陈雨</strong>
-            <span class="muted small" id="menuRole">高级后端工程师</span>
+            <strong id="menuName">访客</strong>
+            <span class="muted small" id="menuRole">尚未连接</span>
           </div>
-          <button class="menu-item" role="menuitem" data-action="profile">个人资料与授权</button>
-          <button class="menu-item" role="menuitem" data-action="product">产品介绍</button>
+          <button class="menu-item" role="menuitem" data-action="console">招聘工作台</button>
+          <button class="menu-item" role="menuitem" data-action="candidate">候选人空间</button>
+          <button class="menu-item" role="menuitem" data-action="profile">我的报告</button>
+          <button class="menu-item" role="menuitem" data-action="about">产品介绍</button>
           <button class="menu-item" role="menuitem" data-action="redetect">
-            服务状态：<span id="menuService">检测中…</span>
+            服务状态：<span id="menuService">重新检测</span>
           </button>
-          <button class="menu-item" role="menuitem" data-action="switch">切换候选人</button>
+          <button class="menu-item" role="menuitem" data-action="signout">退出当前身份</button>
         </div>
       </div>
     </div>
   </header>
 
-  <div class="modal" id="productModal" hidden>
-    <div class="modal-scrim" id="productScrim"></div>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="productTitle">
-      <button class="modal-close" id="productClose" aria-label="关闭">×</button>
-      <div class="modal-body">
-        <p class="eyebrow">产品介绍</p>
-        <h1 class="display" id="productTitle">一场面试，从流程到证据都说得清。</h1>
-        <p class="lede">
-          这是面向企业招聘的 AI 线上面试中台：把 1 到 5 轮面试变成可编排的流程，
-          用多 Agent 承担提问、追问与评分，所有结论都能回到候选人的原话。
-        </p>
+  <main id="main"></main>
 
-        <article class="doc">
-          <h2>一、面试怎么跑</h2>
-          <p>面试由状态机驱动，固定六个阶段，每一步的时长与考察项都有预算：</p>
-          <ol class="doc-steps">
-            <li><b>开场</b><span>自我介绍，建立上下文</span></li>
-            <li><b>经历深挖</b><span>围绕简历项目逐层追问</span></li>
-            <li><b>技术基础</b><span>语言、运行时、分布式</span></li>
-            <li><b>场景设计</b><span>开放设计题与权衡</span></li>
-            <li><b>候选人反问</b><span>候选人提问，不计分</span></li>
-            <li><b>收尾</b><span>同步后续流程</span></li>
-          </ol>
-          <p class="muted small">
-            调度同时受两个约束：<b>时间预算</b>（剩余不足 20% 时只追问高重要性考点）
-            与<b>覆盖度</b>（确保每个考察项都被问到）。单题追问不超过 2 层，
-            全场超时会硬收口并把未覆盖项写进报告。
-          </p>
-        </article>
-
-        <article class="doc">
-          <h2>二、AI 怎么决定"追问什么"</h2>
-          <p>不是让模型自由发挥，而是<b>检索参考答案</b>后挑缺口：</p>
-          <ul class="doc-list">
-            <li>每道题的参考答案被拆成若干要点，全部进检索索引</li>
-            <li>检索是混合的：BM25（术语精确命中）+ 向量（语义泛化）+ RRF 融合 + 精排</li>
-            <li>回答里没覆盖、又被参考答案强调的要点，才会成为追问目标</li>
-            <li>如果简历里恰好写到这个要点，追问会直接引用简历原话（原文定位）</li>
-          </ul>
-        </article>
-
-        <article class="doc">
-          <h2>三、评分为什么可信</h2>
-          <p>每一层都在防"看起来合理但无法核对"的分数：</p>
-          <ul class="doc-list">
-            <li><b>五级 rubric</b>：等级到分数的换算规则写死在代码里，不让模型决定</li>
-            <li><b>证据绑定</b>：每个维度分必须挂候选人原话，拿不出证据的分数直接作废</li>
-            <li><b>证据反查</b>：模型引用的原话必须真的出现在回答里，编造的会被丢弃</li>
-            <li><b>双模型交叉</b>：分歧在容忍范围内取保守值，超阈值由第三方仲裁</li>
-            <li><b>降级可见</b>：大模型不可用时自动回落到规则评分，并在报告里标注</li>
-          </ul>
-        </article>
-
-        <article class="doc">
-          <h2>四、1 到 5 轮的 AI 参与度</h2>
-          <table class="doc-table">
-            <thead><tr><th>轮次</th><th>AI 角色</th><th>参与度</th><th>人类角色</th></tr></thead>
-            <tbody>
-              <tr><td>1 面</td><td>全自动面试官</td><td>100%</td><td>仅异常复核</td></tr>
-              <tr><td>2 面</td><td>监考 + 判题 + 追问</td><td>90%</td><td>代码抽检</td></tr>
-              <tr><td>3 面</td><td>主持 + 抬杠式追问</td><td>60%</td><td>人类终审</td></tr>
-              <tr><td>4 面</td><td>Copilot 实时辅助</td><td>30%</td><td>人类主导</td></tr>
-              <tr><td>5 面</td><td>初筛 + 纪要</td><td>20%</td><td>HR 主导</td></tr>
-            </tbody>
-          </table>
-          <p class="muted small">
-            AI 参与度随轮次递减，终面永远由人决定；同时保留"AI 落选 → 人类复议"的申诉通道。
-          </p>
-        </article>
-
-        <article class="doc">
-          <h2>五、技术底座</h2>
-          <ul class="doc-list">
-            <li><b>接入</b>：Go 长连接网关，WebSocket 承载文本与二进制音频（PCM16）</li>
-            <li><b>实时音频</b>：VAD 端点检测（能量+过零率、噪声底自适应）、语义/静音/超时三层收口、打断级联取消</li>
-            <li><b>编排</b>：轮次状态机 + 问题 DAG；断线重连靠重放已落库问答，可跨进程恢复</li>
-            <li><b>存储</b>：MySQL（业务主数据）/ Redis（会话快照）/ 内存（零依赖演示），三套实现共用行为契约测试</li>
-            <li><b>治理</b>：单机限流、优雅关闭、授权留痕可查、成本与延迟分段观测</li>
-          </ul>
-        </article>
-
-        <article class="doc">
-          <h2>六、数据与边界</h2>
-          <ul class="doc-list">
-            <li>开始面试前需要候选人<b>明示同意</b>，同意的时间、范围与来源 IP 会留痕并可随时核对</li>
-            <li>明确告知"本轮由 AI 面试官主持"，不做伪装成真人的设计</li>
-            <li>不做情绪识别与面相分析；反作弊只产出风险事件供人判断，不自动淘汰</li>
-            <li class="muted">
-              当前未完成：浏览器采集 PCM 上行、真实厂商 ASR/TTS 联调、多租户 RBAC
-              与审计日志写入、在线编程沙箱、语义向量默认使用本地词面相似度。
-            </li>
-          </ul>
-        </article>
-
-        <div class="actions">
-          <button class="btn primary" id="productCta">开始一场面试</button>
-          <button class="btn outline" id="productCloseBottom">关闭</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <main id="main">
-    <!-- ① 候选人空间 -->
-    <section id="viewOverview" class="view">
-      <div class="view-head">
-        <div>
-          <p class="eyebrow">候选人空间</p>
-          <h1 class="display" id="greeting">下午好。</h1>
-          <p class="lede" id="overviewLede">正在加载…</p>
-        </div>
-        <span class="pill ok"><i></i>账户已验证</span>
-      </div>
-
-      <article class="card">
-        <span class="pill mint">即将开始</span>
-        <div class="card-head">
-          <span class="avatar-square" id="ovAvatar">YS</span>
-          <div>
-            <h2 id="ovPosition">高级后端工程师</h2>
-            <p class="muted" id="ovCompany">示例科技 · 技术面试</p>
-          </div>
-        </div>
-
-        <dl class="facts">
-          <div><dt>面试时间</dt><dd id="ovTime">—</dd></div>
-          <div><dt>预计时长</dt><dd id="ovDuration">45 分钟</dd></div>
-          <div><dt>AI 面试官</dt><dd id="ovInterviewer">林澈 · 专业、中性</dd></div>
-          <div><dt>面试阶段</dt><dd id="ovStage">开场、经历、技术、场景、收尾</dd></div>
-        </dl>
-
-        <div class="progress-row">
-          <span class="muted">准备进度</span>
-          <span class="muted" id="ovPrepPct">0%</span>
-        </div>
-        <div class="bar"><i id="ovPrepBar" style="width:0%"></i></div>
-        <p class="muted small" id="ovPrepHint">还需完成设备检查和数据同意。</p>
-
-        <div class="actions">
-          <button class="btn primary wide" id="btnContinuePrep">继续准备</button>
-          <button class="btn outline wide" id="btnPreviewRoom">预览面试房间</button>
-        </div>
-      </article>
-
-      <section class="values">
-        <div><span class="idx">01</span><h3>自适应追问</h3><p>沿着回答里的缺口继续深入，遇到反例直接降级。</p></div>
-        <div><span class="idx">02</span><h3>全程透明</h3><p>阶段、时长、追问与评分来源在整个过程中可见。</p></div>
-        <div><span class="idx">03</span><h3>证据驱动</h3><p>每个判断都能回到候选人的原话，可逐条复核。</p></div>
-      </section>
-    </section>
-
-    <!-- ② 面试准备 -->
-    <section id="viewPrep" class="view" hidden>
-      <div class="subbar">
-        <button class="btn outline small" id="prepBack">返回候选人概览</button>
-        <span class="muted" id="prepContext">示例科技 · 高级后端工程师</span>
-        <span class="pill ok"><i></i>自动保存</span>
-      </div>
-
-      <div class="view-head">
-        <div>
-          <p class="eyebrow">面试准备</p>
-          <h1 class="display">开始前，确认一切准备就绪。</h1>
-        </div>
-        <span class="muted" id="prepStepCount">第 1 / 5 步</span>
-      </div>
-
-      <div class="prep-grid">
-        <ol class="stepper" id="stepper"></ol>
-        <div class="card" id="prepPanel"></div>
-      </div>
-    </section>
-
-    <!-- ③ 面试房间 -->
-    <section id="viewRoom" class="view" hidden>
-      <div class="room-head">
-        <span id="roomTitle">示例科技 · 高级后端工程师</span>
-        <span class="muted" id="roomStage">技术面试 · 1 / 6</span>
-        <span class="muted mono" id="roomTimer">00:00</span>
-      </div>
-
-      <div class="room">
-        <span class="pill live" id="roomStatus"><i></i>正在听取回答</span>
-        <div class="stage-avatar">
-          <div class="bubble-avatar" id="roomAvatar">林</div>
-          <p class="muted small">AI 面试官 · <span id="roomInterviewer">林澈</span></p>
-        </div>
-        <div class="self-card">
-          <span class="muted small">你</span>
-          <strong id="roomCandidate">候选人</strong>
-        </div>
-
-        <div class="room-question">
-          <p class="muted small" id="roomAskLabel">AI 面试官 · 林澈</p>
-          <p class="question" id="roomQuestion">正在建立连接…</p>
-          <p class="muted small" id="roomTags">阶段与追问状态会在这里显示</p>
-        </div>
-      </div>
-
-      <div class="transcript" id="transcript"></div>
-
-      <form class="composer" id="formAnswer">
-        <textarea id="answer" rows="2"
-          placeholder="用键盘作答。语音链路（VAD / 流式识别 / 打断）已在后端实现并测试，麦克风采集是最后一段待接的线。"></textarea>
-        <button class="btn outline" type="button" id="btnVoice">语音</button>
-        <button class="btn primary" type="submit" id="btnSend">发送</button>
-      </form>
-      <p class="live-transcript muted small" id="liveTranscript" hidden></p>
-    </section>
-
-    <!-- ④ 报告 -->
-    <section id="viewReport" class="view" hidden>
-      <div class="subbar">
-        <span class="eyebrow plain">候选人报告</span>
-        <span class="muted" id="repSession">—</span>
-        <span class="pill mint" id="repStatus">报告可用</span>
-      </div>
-
-      <div class="report-head">
-        <div>
-          <p class="eyebrow" id="repDisclosure">示例报告 · 已向候选人披露</p>
-          <h1 class="display" id="repPosition">高级后端工程师</h1>
-          <p class="muted" id="repMeta">—</p>
-        </div>
-      </div>
-
-      <hr class="rule" />
-
-      <div class="score-grid">
-        <div class="score-left">
-          <div class="score">
-            <span class="score-num" id="repScore">0</span>
-            <span class="score-unit">/ 100</span>
-          </div>
-          <p class="muted small" id="repScoreNote">
-            综合评分。分数用于组织观察，不代表客观结论。
-          </p>
-        </div>
-        <div class="score-right" id="repDimensions"></div>
-      </div>
-
-      <hr class="rule" />
-
-      <div id="repDetail"></div>
-
-      <div class="actions">
-        <button class="btn outline" id="btnAnother">再面一场</button>
-        <button class="btn outline" id="btnPrint">打印 / 导出 PDF</button>
-        <button class="btn outline" id="btnExport">导出报告 JSON</button>
-      </div>
-    </section>
-
-    <!-- ⑤ 个人资料 -->
-    <section id="viewProfile" class="view" hidden>
-      <div class="view-head">
-        <div>
-          <p class="eyebrow">个人资料</p>
-          <h1 class="display">你的数据，你能看到。</h1>
-          <p class="lede">授权记录、会话与报告都按会话留痕，可随时核对。</p>
-        </div>
-      </div>
-      <article class="card">
-        <h2>面试偏好</h2>
-        <div class="form-grid">
-          <label>称呼<input id="pfName" placeholder="陈雨" /></label>
-          <label>公司<input id="pfCompany" placeholder="示例科技" /></label>
-          <label>应聘岗位<input id="pfPosition" placeholder="高级后端工程师" /></label>
-          <label>AI 面试官名<input id="pfInterviewer" placeholder="林澈" /></label>
-        </div>
-        <p class="muted small">这几项只影响界面显示与报告标题，不参与评分。</p>
-      </article>
-      <article class="card">
-        <h2>授权留痕</h2>
-        <p class="muted small">每次开始面试前，服务端会记录你同意的范围、时间与来源。</p>
-        <div id="pfConsents" class="consent-list muted small">还没有面试记录。</div>
-      </article>
-      <article class="card">
-        <h2>历史会话</h2>
-        <div id="pfSessions" class="muted small">加载中…</div>
-      </article>
-    </section>
-  </main>
+  <footer class="foot">
+    <span>AI Interview OS · 面试结论仅供参考, 录用决定由人做出并署名。</span>
+    <span class="muted">若面试中出现网络中断, 重新打开链接即可从断点继续。</span>
+  </footer>
 
   <div class="toast" id="toast" hidden></div>
-  <script src="/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

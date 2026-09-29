@@ -442,3 +442,152 @@ textarea { resize: vertical; }
   .score-num { font-size: 72px; }
   .self-card { position: static; width: auto; margin-top: 16px; }
 }
+
+/* ---------- 工作台 / 面试间新增组件 ----------
+   这一层是"多模块"带出来的界面: 看板、管道、题库、面试间、系统治理。
+   视觉规则与上面一致 —— 留白多、边框细、颜色只用在状态上。 */
+
+main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
+
+.btn.small { padding: 6px 12px; font-size: 13px; }
+.btn.danger { background: #8c2f2f; color: #fff; border: 1px solid #8c2f2f; }
+.btn.danger:hover { background: #7a2828; }
+.btn.ghost { background: transparent; color: var(--ink-2); border: 1px solid transparent; }
+.btn.ghost:hover { color: var(--ink); border-color: var(--line); }
+
+.pill.neutral { background: var(--line-2); color: var(--ink-2); }
+.pill.live { background: var(--accent-soft); color: var(--accent); }
+.pill.ok { background: #e6f2ea; color: var(--accent); }
+.pill.mint { background: #eef4ff; color: #2f4d8f; }
+
+.card.tight { padding: 16px 18px; }
+.card.narrow { max-width: 560px; margin: 0 auto; }
+.card.center { text-align: center; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
+.about-grid { display: grid; gap: 18px; }
+
+.head-actions { display: flex; gap: 10px; align-items: center; }
+.actions.tight { gap: 8px; margin-top: 12px; }
+
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 22px; }
+.metric {
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px 20px;
+}
+.metric-label { font-size: 12.5px; color: var(--ink-3); letter-spacing: .04em; }
+.metric-value { font-family: var(--serif); font-size: 34px; font-weight: 600; line-height: 1.1; }
+
+.funnel { display: grid; gap: 10px; margin-top: 12px; }
+.funnel-row { display: grid; grid-template-columns: 120px 1fr 42px; align-items: center; gap: 12px; }
+.funnel-label { font-size: 13.5px; color: var(--ink-2); }
+
+.bar.thin { height: 5px; }
+
+.kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; align-items: start; }
+.kanban-col {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px; min-height: 160px;
+}
+.kanban-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.kanban-card {
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  padding: 12px; margin-bottom: 10px; background: var(--bg);
+}
+
+.round-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 6px; }
+.round-list li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed var(--line-2); padding-bottom: 6px; }
+.round-editor, .point-editor { display: grid; gap: 8px; margin: 10px 0; }
+.round-row { display: grid; grid-template-columns: 34px 1.4fr 84px 110px auto auto; gap: 8px; align-items: center; }
+.round-row input, .round-row select { margin: 0; }
+.point-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; align-items: center; }
+
+.inline-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.check-row { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0; font-size: 14px; }
+.check-row input { margin-top: 3px; }
+
+.search-row { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.search-row input { flex: 1; }
+.search-results { display: grid; gap: 10px; margin-top: 6px; }
+.hit { border-left: 3px solid var(--accent); padding: 6px 12px; background: var(--bg); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.hit-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+
+.provider-list { display: grid; gap: 10px; margin: 12px 0; }
+.provider-row {
+  display: grid; grid-template-columns: 96px 1fr auto; gap: 12px; align-items: center;
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+
+.device-grid { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; margin: 12px 0; }
+.preview { width: 100%; border-radius: var(--radius-sm); background: #0b0b0c; aspect-ratio: 4 / 3; object-fit: cover; }
+.preview.remote { border: 2px solid var(--accent); }
+.self-card.video { position: relative; }
+.badge {
+  position: absolute; left: 10px; top: 10px; background: rgba(0,0,0,.6); color: #fff;
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+}
+.meter { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 4px; background: rgba(255,255,255,.25); border-radius: 999px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: #6ee7a8; transition: width .08s linear; }
+
+.room-grid { display: grid; grid-template-columns: minmax(0, 2.1fr) minmax(240px, 1fr); gap: 18px; margin-top: 16px; }
+.room-stage { display: grid; grid-template-columns: 1fr 200px; gap: 14px; align-items: start; }
+.room-side { display: grid; gap: 14px; align-content: start; }
+.side-block { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.ai-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+}
+.peer-list { display: grid; gap: 6px; margin-top: 8px; }
+.peer-row { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); display: inline-block; }
+
+.turn.answer .turn-tag { background: #eef4ff; color: #2f4d8f; }
+.turn.probe .turn-tag { background: var(--warn-soft); color: var(--warn); }
+.turn-q { display: flex; gap: 10px; align-items: baseline; }
+.turn-a { margin: 6px 0 0 0; color: var(--ink-2); }
+.transcript.readonly { max-height: none; overflow: visible; }
+
+.code-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-top: 16px; }
+.code-head { display: grid; grid-template-columns: auto 110px 1fr auto; gap: 10px; align-items: center; margin-bottom: 10px; }
+.code-panel textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.console-output {
+  background: #17181a; color: #e8e6e1; border-radius: var(--radius-sm);
+  padding: 12px; font-size: 12.5px; min-height: 60px; white-space: pre-wrap; margin: 10px 0 0 0;
+}
+
+.report-body { display: grid; gap: 8px; }
+.section-title { margin: 18px 0 8px 0; font-size: 16px; }
+.score-left { display: flex; flex-direction: column; gap: 8px; }
+.dim-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.dim-name { font-weight: 600; }
+.evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.callout { background: var(--accent-soft); border-radius: var(--radius-sm); padding: 14px 16px; margin: 10px 0; }
+.callout.warn { background: var(--warn-soft); }
+.recording-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--line-2); padding: 12px 0; }
+.recording-player { width: 100%; max-height: 420px; margin-top: 10px; border-radius: var(--radius-sm); background: #0b0b0c; }
+.resume-source { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--radius-sm); padding: 12px; font-size: 13px; max-height: 320px; overflow: auto; }
+.resume-preview { margin-top: 12px; }
+
+.foot {
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 18px 32px 36px 32px; color: var(--ink-3); font-size: 12.5px;
+  border-top: 1px solid var(--line); margin-top: 40px;
+}
+
+.toast[data-kind="error"] { background: #7a2828; }
+.toast[data-kind="info"] { background: var(--dark); }
+
+/* ---------- 打印 ----------
+   打印/导出 PDF 之前是"点了没反应"的状态: 原因是页面上还挂着导航、
+   隐藏弹层与按钮, 打印预览要么空白要么全是控件。这里显式把非报告内容
+   收起来, 只留下报告本身。 */
+@media print {
+  :root { --bg: #fff; }
+  .nav, .foot, .subbar, .head-actions, .actions, .toast, .modal { display: none !important; }
+  main { padding: 0; max-width: none; }
+  .card { border: 1px solid #ddd; break-inside: avoid; }
+  .report-body { break-inside: auto; }
+  .quote { break-inside: avoid; }
+  .transcript { max-height: none; overflow: visible; }
+  a[href]::after { content: ""; }
+}

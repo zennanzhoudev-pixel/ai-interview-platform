@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # 第一道门: 格式、静态检查、单元测试、构建。
+  # 这些都不依赖外部服务, 因此必须永远能在干净的 runner 上跑通 ——
+  # 一旦 CI 需要"先起一堆容器", 它就会开始被忽略。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./web)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: 单元测试(带竞态检测)
+        run: go test ./... -race -count=1
+
+      - name: 构建
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/interviewd ./cmd/interviewd
+
+      # 离线模拟跑完整场面试: 不依赖任何外部服务, 但覆盖了
+      # 编排状态机 + 评分 + 报告生成这条主链路。
+      - name: 端到端模拟一场面试
+        run: /tmp/interviewd -round 1 -minutes 45 -out /tmp/report.json
+
+      - name: 报告产物非空
+        run: test -s /tmp/report.json
+
+  # 第二道门: 前端模块的语法与导入解析。
+  # 前端没有构建步骤, 因此"能在浏览器里跑起来"没有编译器兜底 ——
+  # 这里用 node 做静态语法检查, 把最低级的错误挡在合并之前。
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 检查 ES 模块语法
+        run: |
+          set -e
+          mkdir -p /tmp/jscheck
+          for f in web/js/*.js; do
+            cp "$f" "/tmp/jscheck/$(basename "$f" .js).mjs"
+          done
+          for f in /tmp/jscheck/*.mjs; do
+            node --check "$f"
+          done
+          echo "前端模块语法检查通过"
+
+  # 第三道门: MySQL 集成测试。它需要真实数据库, 因此单独一个 job,
+  # 失败了也只说明"存储实现有问题", 不会让上面两个 job 的结论变模糊。
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: interview
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+      - name: 存储契约测试(内存 + MySQL 同一套用例)
+        env:
+          MYSQL_DSN: "root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC"
+        run: go test ./internal/store/... -count=1 -v

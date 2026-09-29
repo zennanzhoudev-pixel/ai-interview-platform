@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -10,14 +11,22 @@ import (
 
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/platform"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 )
 
+// clientMessage 是客户端通过文本帧发来的消息。
+type clientMessage struct {
+	Type       string `json:"type"`
+	Text       string `json:"text"`
+	DurationMS int64  `json:"duration_ms"`
+}
+
 // connWriter 串行化对 WebSocket 的写。
 //
-// gorilla/websocket 同一时刻只允许一个写者。语音模式下, 事件泵与
-// 回合协程都可能写连接, 所以用一个互斥锁包住所有写操作 —— 这类并发写
-// 导致的协议错乱, 通常要压测才暴露, 但根因在写代码的第一天就埋下了。
+// gorilla/websocket 同一时刻只允许一个写者。语音模式下事件泵、心跳协程与
+// 回合协程都会写连接, 所以用一个互斥锁包住所有写操作 —— 这类并发写导致的
+// 协议错乱通常要压测才暴露, 但根因在写代码的第一天就埋下了。
 type connWriter struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -26,13 +35,22 @@ type connWriter struct {
 func (w *connWriter) writeJSON(v any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = w.conn.WriteJSON(v)
 }
 
 func (w *connWriter) writeBinary(b []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = w.conn.WriteMessage(websocket.BinaryMessage, b)
+}
+
+// writeControl 发送控制帧(心跳)。控制帧不能与数据帧并发写, 因此共用同一把锁。
+func (w *connWriter) writeControl(messageType int, deadline time.Duration) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteControl(messageType, nil, time.Now().Add(deadline))
 }
 
 // voiceLoop 用 media.Session 驱动一场语音面试。
@@ -45,11 +63,8 @@ func (w *connWriter) writeBinary(b []byte) {
 // 打断的两条路径都成立:
 //   - 服务端 VAD 检测到插话, 主动取消在途的 TTS 流;
 //   - 前端检测到用户说话, 上报已播进度, 服务端据此记录"AI 被听到了什么"。
-//
-// 并发模型: 一个 goroutine 读连接(音频/打断), 主循环处理识别结果并播报。
-// Speak 阻塞直到说完或被打断 —— 打断通过 context 级联取消实现, 不轮询标志位。
 func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orchestrator.Engine,
-	sess store.Session, firstFrame []byte, asr media.ASRProvider, tts media.TTSProvider) {
+	sess store.Session, firstFrame []byte) {
 
 	writer := &connWriter{conn: conn}
 	finalCh := make(chan media.Event, 16)
@@ -57,7 +72,7 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	ms := media.NewSession(loopCtx, asr, tts, s.voiceConfig(), media.SinkFunc(func(ev media.Event) {
+	ms := media.NewSession(loopCtx, s.cfg.ASR, s.cfg.TTS, s.voiceConfig(), media.SinkFunc(func(ev media.Event) {
 		if ev.Type == media.EvAssistantAudio {
 			writer.writeBinary(ev.PCM)
 			return
@@ -79,10 +94,16 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 		pendingText = d.Question
 	}
 	questionSentAt := time.Now()
-	go func() { _ = ms.Speak(loopCtx, pendingText) }()
+	// 播报放到独立 goroutine: Speak 会阻塞直到说完或被打断,
+	// 不能卡住下面的读循环。用 platform.Go 保证它 panic 时不会带走整个进程。
+	platform.Go(loopCtx, s.logger, "voice.speak", func(name string) {
+		s.metrics.Panics.WithLabelValues(name).Inc()
+	}, func() { _ = ms.Speak(loopCtx, pendingText) })
 
 	// 读连接: 二进制帧喂给 VAD/ASR, interrupt 触发打断。
-	go func() {
+	platform.Go(loopCtx, s.logger, "voice.reader", func(name string) {
+		s.metrics.Panics.WithLabelValues(name).Inc()
+	}, func() {
 		defer cancel()
 		if len(firstFrame) > 0 {
 			ms.OnAudioFrame(firstFrame)
@@ -92,6 +113,7 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 			if err != nil {
 				return
 			}
+			s.metrics.WSMessages.WithLabelValues(messageKind(mt)).Inc()
 			if mt == websocket.BinaryMessage {
 				ms.OnAudioFrame(data)
 				continue
@@ -104,7 +126,7 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 				ms.Interrupt(msg.PlayedMS)
 			}
 		}
-	}()
+	})
 
 	turnCount := 0
 	for {
@@ -112,28 +134,29 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 		case <-loopCtx.Done():
 			return
 		case ev := <-finalCh:
-			// 识别出一段完整回答, 推进引擎。
+			replyStarted := time.Now()
 			decision, err := eng.Submit(ev.Text, time.Since(questionSentAt))
 			if err != nil {
 				writer.writeJSON(map[string]any{"type": "error", "message": err.Error()})
 				continue
 			}
-			if err := s.persistTurn(loopCtx, sess.ID, decision.Turn); err != nil {
-				s.logger.Printf("语音回答落库失败: %v", err)
+			if err := s.persistTurn(loopCtx, sess, decision.Turn); err != nil {
+				s.logger.ErrorContext(loopCtx, "语音回答落库失败",
+					append(platform.AuditAttrs(loopCtx), slog.Any("err", err))...)
 			}
 			turnCount++
+			s.metrics.FirstResponse.WithLabelValues(sess.TenantID).
+				Observe(time.Since(replyStarted).Seconds())
 			writer.writeJSON(turnResultPayload(decision))
 
 			if decision.Action == orchestrator.ActionFinish {
-				rep, err := s.finishSession(loopCtx, sess, eng)
-				if err != nil {
-					writer.writeJSON(map[string]any{"type": "error", "message": err.Error()})
+				rep, ferr := s.finishSession(loopCtx, sess, eng)
+				if ferr != nil {
+					writer.writeJSON(map[string]any{"type": "error", "message": ferr.Error()})
 					return
 				}
 				payload, _ := json.Marshal(rep)
-				writer.writeJSON(map[string]any{
-					"type": "report", "payload": json.RawMessage(payload),
-				})
+				writer.writeJSON(map[string]any{"type": "report", "payload": json.RawMessage(payload)})
 				return
 			}
 
@@ -144,10 +167,11 @@ func (s *Server) voiceLoop(ctx context.Context, conn *websocket.Conn, eng *orche
 	}
 }
 
+// voiceConfig 组装语音链路配置, 并把题库里的技术热词塞进 ASR。
+// 面试场景下 "Goroutine / ZSet / 幂等" 这类词通用模型基本必错,
+// 而它们恰恰是评分要点 —— 热词表是零成本的准确率提升。
 func (s *Server) voiceConfig() media.SessionConfig {
 	cfg := media.DefaultSessionConfig()
-	// 语音场景下 ASR 需要知道技术热词, 否则 Goroutine、ZSet 这类词基本必错。
-	// 这里把题库里的判定要点都塞进热词表 —— 这是零成本的准确率提升。
 	hot := make(map[string]bool)
 	for _, q := range orchestrator.DefaultBank().All() {
 		for _, kw := range q.Keywords {

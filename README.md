@@ -1,313 +1,301 @@
-# AI 线上面试中台 (InterviewOS)
+# AI Interview OS · 企业级 AI 线上面试中台
 
-> 面向企业招聘场景的 AI 线上面试中台: 把组织里的 **1 面到 5 面**标准化为可编排的面试流程,
-> 用多 Agent 承担面试官 / 追问 / 评估 / 反作弊角色, 在实时音视频链路上完成 40 到 60 分钟
-> 结构化面试, 产出**可解释、可复核、可横向对齐**的评估报告。
+把组织里的 **1 面到 5 面**标准化为可编排的面试流程: AI 承担提问、追问与评分,
+人类面试官在自己该出现的那一轮进入面试间; 面试结论自动回流到招聘管道,
+所有人对同一份数据做判断。
 
-`Go` · `gRPC` · `WebSocket` · `Redis` · `MySQL` · `Kafka` · `Elasticsearch` · `Prometheus` · `Jaeger`
+`Go 1.22` · `WebSocket(文本+音频+视频信令)` · `WebRTC` · `MySQL` · `Redis` ·
+`Prometheus` · `OpenTelemetry` · 零构建前端(go:embed)
 
 ---
 
-## 这个项目解决什么问题
+## 1. 它解决什么问题
 
-技术面试的前一两轮里, 大量时间花在**重复、可标准化**的环节: 简历真实性核对、基础八股、
-项目细节深挖。这些环节占掉了面试官大量时间, 但对候选人的区分度并不高。
+技术面试的前一两轮里, 大量时间花在**重复、可标准化**的环节: 简历真实性核对、
+基础技术深挖、编码。而真正需要人的判断力的环节(架构取舍、协作方式、动机匹配)
+常常因为前面的环节挤占时间而被草草带过。
 
-同时, 真正需要人的判断力的环节(系统设计的取舍、跨团队协作、文化匹配)却常常因为
-前面的环节挤占时间而被草草带过。
+所以核心主张是:
 
-所以这个项目的核心主张是:
-
-> **AI 不是替代面试官, 而是重构面试流水线** —— 把 1 到 2 面全自动化, 把 3 到 5 面变成
-> 人机协同, 让人类面试官的注意力只花在真正需要判断的地方。
-
-### 5 轮面试的 AI 参与度梯度
+> **AI 不是替代面试官, 而是重构面试流水线** —— 1 到 2 面尽量自动化,
+> 3 到 5 面变成人机协同, 人类面试官的注意力只花在真正需要判断的地方。
 
 | 轮次 | 考察目标 | AI 角色 | AI 参与度 | 人类角色 |
 |---|---|---|---|---|
 | 1 面 | 简历真实性、语言/框架基础 | 全自动 AI 面试官 | 100% | 仅异常复核 |
-| 2 面 | 现场编码、边界思考、复杂度 | AI 监考 + 判题 + 追问 | 90% | 代码抽检 |
-| 3 面 | 架构设计、容量估算、权衡 | AI 主持 + 抬杠式追问 | 60% | 人类终审 |
-| 4 面 | 业务理解、选型决策、协作 | Copilot 实时辅助 | 30% | 人类主导 |
-| 5 面 | 动机、稳定性、文化匹配 | AI 初筛 + 纪要 | 20% | HR 主导 |
+| 2 面 | 现场编码、边界与复杂度 | AI 监考 + 判题(隔离沙箱) | 90% | 代码抽检 |
+| 3 面 | 架构设计、容量估算 | AI 主持 + 抬杠式追问 + 旁听席 | 60% | 人类终审 |
+| 4 面 | 业务理解、选型决策 | 纪要 + 证据整理 | 30% | 人类主导 |
+| 5 面 | 动机、稳定性、文化匹配 | 初筛 + 纪要 | 20% | HR 主导 |
 
-**AI 参与度随轮次递减, 人类判断权重递增** —— 这是整个系统最重要的设计决策。
-除此之外还保留一条 **AI 落选 -> 人类复议** 的申诉通道: 企业级系统必须可申诉。
-
----
-
-## 架构
-
-```
-客户端    Web / H5 / 小程序 / 面试官工作台
-          WebRTC(音视频) + WebSocket(信令) + Monaco(在线编程)
-                              |
-接入网关   Go 长连接网关: 连接分片 | JWT 鉴权 | 租户路由 | 限流熔断 | 心跳续租
-                              |
-实时媒体   VAD 人声检测 | 流式 ASR | 语义端点检测 | 流式 TTS | 打断(barge-in)
-                              |
-面试编排   轮次状态机 + 问题 DAG + Checkpoint 快照 + 多 Agent Runtime   <-- 本项目核心
-                              |
-AI 能力   LLM Gateway(多模型路由/降级) | RAG 检索 | 简历解析 | 评分引擎 | 代码沙箱
-                              |
-数据      MySQL(分库分表) | Redis(状态/索引) | Kafka(事件) | ES(检索) | OSS(音视频)
-                              |
-治理观测   Prometheus | Jaeger | 成本看板 | 灰度 A/B | 审计日志
-```
-
-完整设计见 [docs/设计文档.md](docs/设计文档.md)。
-
-## 产品界面
-
-前端是一条完整的候选人动线, 不是一块聊天窗口:
-
-```
-候选人空间  →  面试准备  →  面试房间  →  候选人报告
- 概览/进度      5 步向导      深色面试间      0..100 分 + 证据
- 即将开始的    概览/简历/     阶段·计时·       维度条 + 逐条
- 面试卡片      设备检查/     追问标记·       原话证据 +
-               数据同意/     实时转写        待确认要点
-               准备完成
-```
-
-- **候选人空间**: 下一场面试卡片、准备进度、以及"自适应追问 / 全程透明 / 证据驱动"三条设计主张。
-- **面试准备**: 五步向导。设备检查会真实枚举音视频设备, 麦克风测试是唯一会触发权限弹窗的动作 ——
-  把弹窗留给用户主动点击, 是这类流程最基本的礼貌。数据同意页的勾选会以硬门槛形式提交给服务端。
-- **面试房间**: 深色面试间, 显示 AI 面试官、当前阶段、已用时长与追问状态; 每轮问答下方直接标注
-  评分、置信度和证据原话, 不做"面试结束后才告诉你发生了什么"。
-- **候选人报告**: 衬线大号综合分 + 各能力项条目, 每个等级都能展开到候选人原话。
-
-界面不使用任何构建工具与 CDN, 静态资源通过 `go:embed` 打进二进制 ——
-部署只有一个文件, 也不会因为外网 CDN 不可达导致面试页白屏。
+轮次怎么跑**由职位的 `rounds` 配置决定**(哪轮 AI 主导、哪轮需要真人到场、
+哪轮是编程轮), 不是写死在代码里。
 
 ---
 
-## 快速开始
+## 2. 现在能跑到什么程度
 
-本仓库当前的实现是**编排引擎 + 评分引擎的离线可跑版本**, 不依赖 ASR / LLM / 数据库,
-因此可以直接放进 CI 做回归。
+下面这张表是**如实的完成度**, 不是路线图。带 ⚠️ 的项需要你自己的密钥或环境才能真正跑通。
 
-```bash
-# 启动 Web 服务, 浏览器打开 http://localhost:8080 就能面一场
-make serve
-
-# 离线跑一场模拟面试(不依赖任何外部服务), 打印成绩单
-make run
-
-# 同时导出 JSON 报告 / 观察双模型分歧链路
-go run ./cmd/interviewd -round 3 -minutes 40 -out ./bin/report.json
-go run ./cmd/interviewd -strict
-
-# 单元测试
-make test
-
-# 可选: 本地依赖(MySQL / Redis / ES / Kafka / Jaeger / Prometheus)
-make docker-up
-
-# 可选: 打开 MySQL 与 Redis 后, 服务自动启用持久化与断线快照
-MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC' \
-REDIS_ADDR=127.0.0.1:6379 \
-go run ./cmd/interviewd -serve :8080
-```
-
-接入大模型评分(任意 OpenAI 兼容服务, 换 base_url 即可切厂商):
-
-```bash
-LLM_API_KEY=sk-xxx LLM_BASE_URL=https://api.deepseek.com/v1 LLM_MODEL=deepseek-chat \
-  go run ./cmd/interviewd -serve :8080
-
-# 想启用双模型交叉(主 + 复核都是大模型, 分歧时三方仲裁):
-LLM_MODEL_B=gpt-4o-mini LLM_API_KEY=sk-xxx go run ./cmd/interviewd -serve :8080
-```
-
-**没有配置任何外部依赖时, 服务照样能跑**: 存储退化为内存、评分退化为规则匹配、
-快照直接禁用(断线重连改为依赖数据库重放), 报告里会标注每一条评分的来源。
-
-运行输出示例(实测截取):
-
-```
-[阶段] RESUME_DEEP_DIVE
-  面试官> 简历里提到你用 ZSet 做索引把查询 RT 降低了 70%, 具体是怎么做的?
-  候选人> 我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引, 用 score 存权重...
-  追问  > 你刚才没有提到 内存, 能展开讲讲吗?
-  候选人> 内存这块我们做过估算, 单个 ZSet 大概几万个成员, 另外加了定期过期清理...
-
-能力维度
-  project_depth      L4 精通    置信度 0.92 | 命中 3 轮
-      + [t_002] 我们把小游戏排行榜从一个大 Hash 拆成了 ZSet 索引...
-      + [t_003] 内存这块我们做过估算, 单个 ZSet 大概几万个成员...
-  architecture       L2 了解    置信度 0.56 | 命中 3 轮
-      待确认要点: 令牌桶 / 容量估算 / 滑动窗口
-
-质量与过程指标
-  问答 15 轮 | 计分 12 轮 | 追问 5 轮 | 最大追问深度 2
-  双模型分歧 0 条 | 三方仲裁 0 条 | 转人工复核 0 条
-  平均置信度 0.82 | 耗时 1415s / 预算 2700s
-
-结论: HIRE (置信度 0.82)
-```
-
----
-
-## 仓库结构
-
-```
-cmd/interviewd/          两个入口: 离线模拟 与 Web 服务(-serve)
-internal/orchestrator/   编排引擎(核心)
-  stage.go                 轮次状态机: 阶段顺序、阶段预算、覆盖目标
-  budget.go                时间预算与覆盖度双约束调度
-  question.go              题库与问题 DAG 节点定义
-  engine.go                决策主流程 + Restore(断线重连重放)
-internal/scoring/        评分引擎
-  rubric.go                五级 rubric、证据绑定、Scorer 接口
-  keyword.go               确定性规则评分器(离线基线 + 降级路径)
-  llmscorer.go             大模型评分器: schema 校验 + 证据反查 + 重试
-  crosscheck.go            双模型交叉评分与三方仲裁
-  chain.go                 降级链(大模型失败自动回落规则评分)
-internal/llm/            OpenAI 兼容客户端 + 轻量 JSON schema 校验
-internal/media/          实时音频链路
-  vad.go / endpointer.go   端点检测与三层结束判定
-  asr_openai.go / tts_openai.go  流式适配器(分段增量转写 + 流式合成)
-  local.go                 离线 ASR/TTS, 让整条链路可在 CI 回归
-  session.go               打断级联取消、已播内容回传、静默期
-internal/store/          持久化: 内存 / MySQL / Redis 快照 + 行为契约测试
-internal/api/            HTTP 与 WebSocket 接入层
-web/                     前端(纯 HTML/CSS/JS, 无构建步骤, go:embed)
-api/proto/               gRPC 契约(编排服务 + 媒体服务)
-deployments/             Prometheus 抓取配置与告警阈值
-docs/                    完整设计方案
-```
-
----
-
-## 五个核心设计决策
-
-### 1. 双层编排: 状态机管结构, DAG 管内容
-
-阶段流转是**确定性的 Go 代码**, 不交给模型决策; 模型只在阶段内部决定"问什么、追不追问"。
-这样既保证每场面试结构一致(面试官之间才可能横向对齐), 又保证模型出问题也炸不到整体流程。
-
-### 2. 时间与覆盖度的双约束调度
-
-没有这层约束, AI 会在候选人的第一个项目上追问六层, 聊掉 30 分钟, 最后系统设计题一个字没问,
-报告出来能力项覆盖度只有 40% —— 这场面试等于白做。
-
-引擎规则: 剩余时间不足 20% 时只对高重要性考点继续追问; 单题追问深度上限 2 层;
-全场时间耗尽后硬收口, 并把未覆盖的能力项显式写进报告, 交给下一轮补。
-
-### 3. 证据绑定: 拿不出证据的分数一律作废
-
-每一个维度分都必须绑定 **候选人原话片段 + turn ID**, 报告里可一键跳回录音位置。
-这是抑制 LLM 幻觉最有效的手段, 也是候选人申诉、面试官复核的依据。
-
-```go
-// 无论上游是规则引擎还是大模型, 只要拿不出证据, 分数就不作数
-func (r Result) Enforce() Result {
-	if len(r.Evidence) > 0 {
-		return r
-	}
-	r.Level = LevelUnknown
-	r.Confidence = 0
-	return r
-}
-```
-
-### 4. 双模型交叉评分 + 三方仲裁
-
-单个模型的分数不可信。两个模型分歧在容忍范围内时取**保守值**(较低等级);
-分歧超过阈值时, 由第三方模型取中位数; 没有仲裁模型时标记**转人工复核**, 而不是随便选一个分数。
-
-```
-分歧 <= 1 级  ->  保守取值, 合并双方证据与缺失要点
-分歧 >  1 级  ->  三方中位数仲裁 (无仲裁模型则转人工)
-```
-
-### 5. 规则评分器封顶 L4
-
-关键词命中率只能证明"候选人说到了这些点", 证明不了他"能提出我们没想到的跨系统方案"
-—— 而后者才是 L5 的定义。所以规则评分器封顶 L4, L5 只能由大模型评分器或人类面试官给出。
-
-这不是妥协, 而是有意的能力边界: **规则拿不准的地方就不要装作拿得准**。
-同一个思路也用在反问环节 —— 开场寒暄和候选人反问不产生评分, 避免无意义的信号污染结论。
-
----
-
-## 企业级治理清单
-
-- **多租户隔离**: 业务表带 `tenant_id`, Redis key 前缀隔离, LLM 调用按租户配额限流
-- **三级降级**: TTS 供应商 -> 备用供应商 -> 文本; LLM 大模型 -> 小模型 -> 转人工
-- **成本核算**: Prompt 前缀 KV Cache 复用、分级模型路由、评分批处理、相似问答缓存
-- **合规**: 录音需候选人明示同意并留存同意快照; 录音默认留存 6 个月; 明确告知"本轮由 AI 主持"
-- **能力边界**: 不做终面决策、不做情绪识别与面相分析、不做无告知的 AI 伪装
-- **可观测**: 首字延迟按 7 段预算拆解归因; 评分分布漂移告警; 双模型分歧率监控
-
----
-
-## 路线图
-
-- [x] **Phase 0** 编排引擎 + 评分引擎 + 离线模拟
-- [x] **Phase 1** 实时音频链路: VAD 端点检测 + 流式 ASR/TTS + 打断级联取消
-- [x] **Phase 2** 大模型评分: 结构化输出 + 证据反查 + 双模型交叉 + 失败降级
-- [x] **Phase 3** 持久化与接入层: MySQL / Redis / 内存三套存储 + Web 服务 + 前端界面 + 断线重连
-- [x] **Phase 4** RAG 参考题库(BM25 + 向量 + RRF + Rerank)、简历解析与原文定位
-- [ ] **Phase 5** 在线编程沙箱、多租户 RBAC、审计日志写入、Jaeger 全链路、校准集回归平台
-
-### 已实现能力
-
-| 能力 | 实现位置 | 验证方式 |
+| 能力 | 状态 | 说明 |
 |---|---|---|
-| 轮次状态机 + 问题 DAG 双层编排 | `internal/orchestrator` | 单元测试断言阶段流转、追问深度上限 |
-| 时间预算与覆盖度双约束调度 | `internal/orchestrator/budget.go` | 长回答挤占预算时报告覆盖缺口 |
-| 断线重连(重放已落库问答) | `Engine.Restore` | 测试断言恢复后阶段/待答问题/统计一致 |
-| VAD 端点检测(能量 + 过零率, 噪声底自适应) | `internal/media/vad.go` | 合成音频验证起止帧、噪声不误触发 |
-| 语义 + 静音 + 超时三层端点判定 | `internal/media/endpointer.go` | 逐条覆盖结束原因 |
-| 流式 ASR / TTS(OpenAI 兼容 + 离线实现) | `internal/media/*_openai.go` | httptest 起真 HTTP 服务验证分片、鉴权、取消 |
-| 打断级联取消 + 已播内容回传 + 静默期 | `internal/media/session.go` | 断言 context 穿透到 TTS 层、无流泄漏、半句不计入已听 |
-| 大模型评分(结构化输出 + Schema 校验) | `internal/scoring/llmscorer.go` | 模拟越界/编造证据/上游故障等情形 |
-| 证据反查(引用的原话必须在回答里) | `internal/scoring/llmscorer.go` | 编造证据被丢弃并使整条评分作废 |
-| 双模型交叉 + 三方仲裁 | `internal/scoring/crosscheck.go` | 容忍范围内取保守值, 超阈值仲裁 |
-| 失败降级(大模型 → 规则) | `internal/scoring/chain.go` | 降级可见, 报告里出 `degraded_scores` |
-| MySQL / Redis / 内存三套存储 | `internal/store` | 一套行为契约测试覆盖三个实现 |
-| Web 服务 + 前端 + 断线重连 | `internal/api`, `web/` | 端到端 WebSocket 跑完整场面试 |
-| 0..100 综合分 + 能力项中文标签 | `internal/orchestrator` | 断言分数与等级换算一致, 综合分为等权平均 |
-| 会话展示元信息(公司/岗位/姓名/面试官) | `internal/store` | 契约测试断言元信息不丢失 |
-| 单机令牌桶限流 + 空闲桶清理 | `internal/api/ratelimit.go` | 覆盖突发、令牌补充、来源隔离、内存清理 |
-| 优雅关闭(等待在途面试结束) | `cmd/interviewd` | 手动验证 Ctrl-C 后的退出日志 |
-| 授权留痕可查接口 | `GET /api/v1/sessions/{id}/consents` | 候选人界面可直接核对 |
-| RAG 参考题库混合检索 | `internal/rag` | BM25/向量/RRF/精排, 追问方向来自参考答案要点 |
-| 简历解析与原文定位 | `internal/resume` | 规则+大模型抽取, 实体带原文偏移, 交叉校验 |
-| 语音面试链路(二进制音频上行) | `internal/api/audio.go` | 端到端测试: 音频→VAD→转写→引擎→TTS 下行 |
-| 联调自检 | `-selftest` | 探测 LLM/TTS/Embedding 是否可用 |
+| 面试编排(阶段状态机 + 问题 DAG + 预算/覆盖度) | ✅ 可运行 | 断线重连靠重放已落库问答, 可跨进程恢复 |
+| RAG 参考题库检索(BM25 + 向量 + RRF + 精排) | ✅ 可运行 | 追问方向来自检索结果; 工作台有"检索可视化"入口 |
+| 简历解析与原文定位 | ✅ 可运行 | 解析成带 rune 偏移的实体, 参与追问与报告定位 |
+| 浏览器麦克风采集与音频上行 | ✅ 可运行 | 16kHz/20ms PCM16 帧, 前端 VAD 联动打断 |
+| 服务端 VAD / 流式识别 / TTS / 打断 | ✅ 可运行 | 需要配置厂商密钥; 未配置时明确拒绝而不是静默降级 |
+| 视频面试 | ✅ 可运行 | 候选人自视 + 人类面试官 P2P 视频(WebRTC, 媒体不过服务端) |
+| 面试录像 | ✅ 可运行 | 浏览器分片上传 + Range 回放 + 保留期清理 + 播放留痕 |
+| 编程轮次与判题沙箱 | ✅ 可运行 | ⚠️ 生产需要容器运行时; 无容器时降级为本机执行并如实告警 |
+| 多租户 RBAC(4 个权限点组 × 3 角色) | ✅ 可运行 | 租户只来自凭据, 绝不接受请求参数 |
+| 审计日志落库(只追加) | ✅ 可运行 | 面试创建/报告查看/改分/录像播放/密钥操作全部留痕 |
+| 限流 / panic 兜底 / 结构化日志 / 指标 / 链路追踪 | ✅ 可运行 | Prometheus 25+ 组指标, OTLP 未配置时退化为 no-op |
+| 招聘域: 职位 / 候选人 / 投递管道 / 题库 / 排期 | ✅ 可运行 | 面试结论自动回流到管道; AI 只记录事实, 不做自动淘汰 |
+| 报告: 证据绑定 + 人工改分 + 打印/导出 | ✅ 可运行 | 每个维度分必须挂候选人原话 |
+| 真实大模型评分(双模型交叉 + 仲裁) | ⚠️ 需密钥 | 配置 `LLM_API_KEY` 后启用; 未配置时用规则评分器并标注 |
+| 语义向量检索 | ⚠️ 需密钥 | 配置 `EMBEDDING_API_KEY`; 未配置时用本地特征哈希(词面相似度) |
+| 真实厂商 ASR/TTS 联调 | ⚠️ 需密钥 | 适配器走 OpenAI 兼容接口, 用 `-selftest` 可先自检 |
 
-### 当前边界(不夸大)
+### 刻意不做的事
 
-以下部分**尚未实现**, 请不要在简历或面试里说成已完成:
+这些不是"还没做", 而是产品边界:
 
-- **浏览器麦克风采集的语音识别**: 前端语音模式用的是浏览器自带的
-  SpeechRecognition(仅 Chrome/Edge), 服务端"二进制音频 + VAD + 打断"链路已实现并测试,
-  但前端"采集 PCM 走 WebSocket 上行"这条线尚未接(服务端上行协议已就绪)。
-- **真实厂商 ASR/TTS 联调**: 环境变量与 `-selftest` 已就绪, 适配器只经 httptest 验证,
-  尚未用真实密钥跑过端到端 —— 需要你的密钥才能真正连一次。
-- **RAG 的语义向量**: 默认用的是本地特征哈希(词面相似度), 不是语义模型;
-  配置 `EMBEDDING_API_KEY` 后切换为 OpenAI 兼容嵌入。追问管道本身是真实的。
-- **多租户 RBAC / 审计日志写入**: `audit_log` 表结构已定义, 但写入代码未实现。
-- **在线编程与代码沙箱**: 未实现。
+- **不做 AI 自动淘汰**: 反作弊与评分只产出建议与风险事件, 录用决定必须由人做出并署名。
+- **不做 AI 伪装真人**: 面试开始时就明确告知本轮由 AI 主持。
+- **不做情绪识别与面相分析**: 它们没有可靠依据, 却会被当成客观结论使用。
+- **不做"录像永久保留"**: 保留期是默认值(90 天)而不是可选项。
 
-MySQL 集成测试需要真实数据库, 默认跳过:
+---
+
+## 3. 快速开始
+
+### 3.1 零依赖跑一场完整面试(不需要任何密钥)
 
 ```bash
-docker compose up -d mysql
-MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/interview?parseTime=true&loc=UTC' \
-  go test ./internal/store/... -run MySQL -v
+make run          # 离线模拟一场面试, 输出报告 JSON
+make test         # 全部单元测试(含沙箱真实执行、录像分片、租户隔离契约)
+```
+
+### 3.2 起服务, 用浏览器跑完整链路
+
+```bash
+make serve        # http://localhost:8080
+```
+
+打开 `http://localhost:8080` 后:
+
+1. **产品介绍** 是完整的产品说明(流程、RAG、评分、视频、边界)。
+2. **招聘工作台** 在本地演示模式下会自动放行(未开启鉴权时不需要密钥)。
+   新建职位 → 导入候选人 → 创建投递 → 面试安排 → **开始面试** → 复制候选人链接。
+3. 用复制出来的链接打开 **候选人空间**: 设备检查 → 数据授权 → 简历确认 → **进入面试间**。
+   面试间支持摄像头自视、麦克风电平、语音作答(直接说话)、键盘作答、编程面板(二面)。
+4. 面试结束后自动生成报告: 分数、能力维度、逐条原话证据、简历原文定位、打印/导出。
+5. 报告与管道数据会回到工作台的 **报告** 与 **管道** 页。
+
+### 3.3 起完整依赖(MySQL / Redis / 录制存储 / Jaeger / Prometheus / Grafana)
+
+```bash
+make docker-up    # 包含 interviewd 本体
+make test-mysql   # 存储契约测试(内存实现与 MySQL 实现跑同一套用例)
 ```
 
 ---
 
-## 设计文档
+## 4. 配置
 
-完整方案(数据模型、延迟预算拆解、成本核算、合规边界、20 个高频追问的答法)见
-[docs/设计文档.md](docs/设计文档.md)。
+所有配置走环境变量或命令行参数, **没有配置文件** —— 少一个配置文件就少一处
+"本地能跑线上不能跑"。
 
-## License
+| 变量 | 作用 | 不配置时的行为 |
+|---|---|---|
+| `MYSQL_DSN` | 业务主数据存储 | 用内存存储(重启丢数据), 并自动开启鉴权警告 |
+| `REDIS_ADDR` | 会话快照(断线重连加速) | 不启用快照; 重连仍然可用, 只是多读一次数据库 |
+| `APP_SECRET` | 候选人令牌签名 + 候选人假名化密钥 | 进程内临时密钥(重启后已发出的链接失效) |
+| `TENANT_ID` | 默认租户 | `default` |
+| `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | 大模型评分 | 规则评分器(报告里标注来源) |
+| `LLM_MODEL_B` | 复核模型(双模型交叉) | 复核用规则评分器 |
+| `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 语义向量检索 | 本地特征哈希(词面相似度) |
+| `ASR_API_KEY` / `ASR_BASE_URL` / `ASR_MODEL` | 语音识别 | 语音模式关闭(WebSocket 明确报错, 不静默降级) |
+| `TTS_API_KEY` / `TTS_BASE_URL` / `TTS_MODEL` | 语音合成 | 同上 |
+| `RECORDING_DIR` | 面试录像落盘目录; 设 `off` 关闭录制 | `data/recordings` |
+| `RECORDING_RETENTION_DAYS` | 录像保留天数 | `90` |
+| `SANDBOX_ENGINE` | 判题引擎 `auto` / `docker` / `local` | `auto`: 有容器用容器, 否则本机执行并告警 |
+| `ICE_SERVERS` | WebRTC 的 STUN/TURN, 逗号分隔 | 公共 STUN(内网环境大概率需要换成自己的 TURN) |
+| `OTLP_ENDPOINT` | 链路追踪接收地址 | 不导出追踪 |
+| `LOG_LEVEL` / `LOG_FORMAT` | 日志级别与格式 | `info` / `text` |
 
-[MIT](LICENSE)
+开面之前先做一次上游自检, 比让第一场面试替你冒烟划算得多:
+
+```bash
+make selftest     # 逐个探测 LLM / Embedding / TTS, 并说明 ASR 为什么无法离线探测
+```
+
+---
+
+## 5. 架构
+
+```
+候选人浏览器                     人类面试官浏览器
+  视频/音频/PCM16 上行             旁听席(WebRTC 视频 + 实时转写)
+  键盘作答 / 编程面板                        |
+        |                                   |
+        +------------- WebSocket -----------+
+                        |
+        接入层 internal/api  (鉴权 · 租户 · 审计 · 限流 · panic 兜底 · 指标)
+                        |
+   编排 internal/orchestrator (阶段状态机 + 问题 DAG + 预算/覆盖度 + 追问策略)
+                        |
+   AI 能力: internal/knowledge(RAG) · internal/scoring(rubric/双模型/仲裁/降级)
+            internal/resume(原文定位) · internal/sandbox(隔离判题) · internal/llm
+                        |
+   实时媒体 internal/media (VAD · 流式 ASR · TTS · 打断级联取消)
+                        |
+   数据 internal/store (内存 / MySQL 同一套契约) · internal/recording(分片 · Range · 保留期)
+                        |
+   治理 internal/auth · internal/privacy · internal/observability · internal/platform
+```
+
+### 几个值得单独说的设计
+
+**一条 WebSocket 承载三条链路。** 文本(JSON)、音频(二进制 PCM16)、
+视频信令(WebRTC offer/answer/ICE)复用同一个连接。面试间只需要一个端口、
+一次鉴权、一条重连逻辑; 多开一条通道就多一整套失败模式。
+
+**信令走服务端, 媒体不过服务端。** 人类面试官与候选人之间是 P2P 视频,
+服务端只转发 SDP/ICE。这既省掉了媒体服务器的带宽与运维成本, 也意味着
+服务端看不到画面 —— 看不到的东西就不会泄漏。旁听票据由 API Key 换取,
+只对一场面试、一个角色、两小时有效, 因此企业密钥不会出现在 URL 里。
+
+**追问方向由检索决定, 不由模型发挥。** 每道题的参考答案被拆成要点建索引
+(BM25 + 向量 + RRF + 精排), 只有"候选人没说到、又被参考答案强调"的要点
+才会成为追问靶子。工作台里的"检索可视化"用的就是这个索引 —— 如果那里的
+结果不相关, 追问也不会好。
+
+**题目、评分要点、检索语料是同一份数据。** 如果"问的题"和"评的分"来自两处,
+报告里的依据迟早会和实际问的问题对不上, 而这种错位几乎无法人工发现。
+
+**降级必须可见。** 没配大模型就用规则评分器, 没配嵌入模型就用词面相似度,
+没配容器就用本机执行 —— 但这三种降级都会在响应、日志与自检页面里
+**明确标注**。一个不说自己降级了的系统, 比一个直接报错的系统更危险。
+
+---
+
+## 6. 主要接口
+
+管理侧(API Key + 角色权限):
+
+| 方法 | 路径 | 权限 |
+|---|---|---|
+| `POST/GET/PATCH` | `/api/v1/jobs[/{id}]` | `job:write` / `recruit:read` |
+| `GET/POST` | `/api/v1/candidates[/{ref}]` | `recruit:read` / `candidate:write` |
+| `GET/POST/PATCH` | `/api/v1/applications[/{id}]` | `recruit:read` / `candidate:write` |
+| `GET/POST/PATCH/DELETE` | `/api/v1/questions[/{id}]` | `recruit:read` / `question:write` |
+| `GET` | `/api/v1/retrieval/search?q=` | `recruit:read` |
+| `GET/POST` | `/api/v1/schedules` | `recruit:read` / `schedule:write` |
+| `POST` | `/api/v1/schedules/{id}/start` | `session:create` |
+| `GET` | `/api/v1/sessions[/{id}][/report]` | `report:read` |
+| `POST` | `/api/v1/sessions/{id}/override` | `score:override` |
+| `POST` | `/api/v1/sessions/{id}/observer-ticket` | `interview:observe` |
+| `GET/DELETE` | `/api/v1/sessions/{id}/recordings[/{kind}]` | `recording:read` / `data:erase` |
+| `POST` | `/api/v1/code/run` | `code:run` |
+| `GET/POST/DELETE` | `/api/v1/keys[/{id}]` | `key:admin` |
+| `GET` | `/api/v1/audit` · `/api/v1/analytics/pipeline` | `audit:read` / `analytics:read` |
+| `GET` | `/api/v1/system/providers[?live=1]` | `key:admin` |
+| `GET` | `/api/v1/candidates/{ref}/export` · `DELETE /api/v1/candidates/{ref}` | `data:erase` |
+
+候选人侧(一次性会话令牌, 只能访问自己的那一场):
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/candidate/session` | 本场信息(轮次、形态、是否需确认授权) |
+| `POST` | `/api/v1/candidate/consent` | 本人确认录音与 AI 评分授权(缺一不可) |
+| `POST` | `/api/v1/candidate/resume` | 上传简历, 解析为带原文位置的实体 |
+| `POST` | `/api/v1/candidate/events` | 反作弊风险事件(只记录, 不判定) |
+| `POST` | `/api/v1/candidate/recording/chunks` · `/finalize` | 录像分片上传与合并 |
+| `POST` | `/api/v1/candidate/code/run` | 面试中运行自己的代码 |
+| `GET` | `/api/v1/candidate/report` | 自己的报告、授权留痕、简历实体 |
+| `WS` | `/ws/interview/{id}?token=` | 文本 / 音频 / 视频信令 |
+| `WS` | `/ws/interview/{id}?role=observer&ticket=` | 人类面试官旁听席 |
+
+运维端点: `GET /healthz`(进程存活) · `GET /readyz`(存储可用, 失败返回 503) ·
+`GET /metrics`(Prometheus)。
+
+---
+
+## 7. 测试
+
+```bash
+make test              # 单元测试(默认后端)
+make test-race         # 带竞态检测
+make test-mysql        # 存储契约测试: 内存实现与 MySQL 实现跑同一套用例
+make frontend-check    # 前端 ES 模块语法检查(前端没有构建步骤, 因此需要显式校验)
+make lint              # golangci-lint(需要先安装)
+make loadtest          # 并发压测: 同时开 10 场完整面试
+```
+
+测试里有几个刻意的选择:
+
+- **沙箱测试跑真实进程**: 超时、输出截断、退出码这些行为, 用 mock 验证等于什么都没验证。
+- **存储契约测试同时跑内存与 MySQL**: "本地用内存跑通、线上换 MySQL"如果只靠人自觉,
+  迟早会因为某个实现少了一条约束而出现语义差异。
+- **前端在 Node 里跑一遍启动路径与全部工作台视图**: 前端没有编译器兜底,
+  因此用最小 DOM 存根把"路由没匹配上""某个视图渲染就抛异常"这类问题挡在合并之前。
+- **RAG 的追问决策有独立用例**: 断言"漏了要点时必须产生追问、要点答全时必须不追问"。
+
+---
+
+## 8. 部署
+
+```bash
+docker build -t ai-interview-platform .          # 多阶段构建 + distroless 运行镜像
+kubectl apply -f deployments/k8s/interviewd.yaml # Deployment / HPA / PDB / Ingress
+```
+
+K8s 清单里有三处是专门为"长连接面试"调的, 不是模板默认值:
+
+- `terminationGracePeriodSeconds: 120` + `preStop`: 45 分钟的面试不能因为滚动更新被切断。
+- Ingress 关闭 `proxy-buffering` 并把读写超时拉到 3600 秒: 否则 AI 的语音会被网关攒着发, 追问听起来像结巴。
+- HPA 的缩容稳定窗口 600 秒: 一个 Pod 上可能挂着几十条进行中的长连接。
+
+判题沙箱应当独立部署(见清单里的注释): 面试服务是无状态的、能随便扩容;
+判题执行器需要容器运行时权限并且会跑不可信代码。把两者放一起, 等于让
+"执行任意代码"发生在承载所有租户会话的进程旁边。
+
+---
+
+## 9. 目录结构
+
+```
+cmd/interviewd/        服务入口: 离线模拟 / Web 服务 / 联调自检 / 容器健康检查
+internal/api/          HTTP + WebSocket 接入层(鉴权 · 审计 · 视频信令 · 录制 · 判题)
+internal/orchestrator/ 面试编排: 阶段状态机 + 问题 DAG + 预算 + 追问策略
+internal/knowledge/    题库与 RAG 知识库(提问 / 追问 / 检索三者共用一份索引)
+internal/rag/          BM25 + 向量索引 + RRF 融合 + 精排
+internal/scoring/      rubric 评分 · 双模型交叉 · 仲裁 · 降级链
+internal/resume/       简历解析与原文定位
+internal/sandbox/      隔离判题(容器 / 本机, 并如实标注隔离等级)
+internal/recording/    录像分片存储与合并
+internal/media/        VAD · 流式 ASR/TTS · 打断级联取消
+internal/store/        内存 / MySQL 存储(同一套行为契约) + schema.sql
+internal/auth/         API Key · 角色权限矩阵 · 候选人会话令牌
+internal/privacy/      假名化与脱敏
+internal/observability/ 指标与链路追踪
+internal/platform/     日志 · goroutine panic 兜底
+web/                   零构建前端(index.html + style.css + js/* ES 模块)
+deployments/           K8s 清单 · Prometheus 配置 · 压测脚本
+docs/                  设计文档与示例报告
+```
+
+---
+
+## 10. 数据与合规
+
+- 候选人原始 ID **不落库**, 只落不可逆的 HMAC 假名引用值(`candidate_ref`)。
+- 联系方式(邮箱/手机号)在落库前脱敏; 来源 IP 脱敏到网段、UA 截断。
+- 开始面试前需要明示同意; 由招聘方后台发起的面试, **必须由候选人本人在面试间确认**,
+  否则 WebSocket 不会开始面试(未获同意就录音或评分不是技术瑕疵, 是违规处理个人信息)。
+- 审计日志**只追加、不随候选人数据删除** —— 它是平台自身的合规证据。
+- 支持数据主体权利: 按 `candidate_ref` 导出全部数据、或删除(录制内容与元数据一并删除)。
+
+更完整的设计取舍见 [docs/设计文档.md](docs/设计文档.md), 示例报告见
+[docs/sample-report.json](docs/sample-report.json)。

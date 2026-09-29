@@ -33,12 +33,29 @@ func TestMySQLStoreSatisfiesContract(t *testing.T) {
 		t.Cleanup(func() { _ = s.Close() })
 		return s
 	})
+	businessContract(t, func(t *testing.T) SessionStore {
+		s, err := OpenMySQL(dsn)
+		if err != nil {
+			t.Fatalf("连接 MySQL 失败: %v", err)
+		}
+		if err := s.Migrate(context.Background()); err != nil {
+			t.Fatalf("初始化表结构失败: %v", err)
+		}
+		resetMySQL(t, s)
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	})
 }
 
 // resetMySQL 在每组用例前清空数据, 保证用例之间互不影响。
 func resetMySQL(t *testing.T, s *MySQLStore) {
 	t.Helper()
-	for _, table := range []string{"qa_turn", "interview_report", "candidate_consent", "interview_session"} {
+	for _, table := range []string{
+		"qa_turn", "interview_report", "candidate_consent", "interview_session",
+		"audit_log", "tenant_api_key",
+		"interview_recording", "interview_schedule", "question_item",
+		"application", "candidate", "job",
+	} {
 		if _, err := s.db.Exec("DELETE FROM " + table); err != nil {
 			t.Fatalf("清理表 %s 失败: %v", table, err)
 		}

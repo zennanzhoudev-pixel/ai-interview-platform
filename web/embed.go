@@ -8,5 +8,8 @@ package web
 
 import "embed"
 
-//go:embed index.html app.js style.css
+// 前端资源清单显式列出, 不使用 all:. 这样"多打了一个调试文件进二进制"
+// 会立刻在 code review 里被发现, 而不是悄悄变大。
+//
+//go:embed index.html style.css js
 var FS embed.FS

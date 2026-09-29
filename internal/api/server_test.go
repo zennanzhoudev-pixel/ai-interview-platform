@@ -93,7 +93,7 @@ func answerUntilReport(t *testing.T, conn *websocket.Conn, maxTurns int) map[str
 
 func TestHealthEndpoint(t *testing.T) {
 	ts, _ := newTestServer(t)
-	resp, err := http.Get(ts.URL + "/api/v1/health")
+	resp, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
 		t.Fatalf("健康检查失败: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestCreateSessionRequiresConsent(t *testing.T) {
 	ts, st := newTestServer(t)
 
 	status, body := createSession(t, ts.URL, map[string]any{
-		"round": 1, "minutes": 30, "consent_recording": false,
+		"round": 1, "minutes": 30, "consent_recording": false, "consent_scoring": true,
 	})
 	if status != http.StatusBadRequest {
 		t.Fatalf("缺少同意应返回 400, 实际 %d", status)
@@ -117,7 +117,7 @@ func TestCreateSessionRequiresConsent(t *testing.T) {
 		t.Fatal("错误响应应包含原因")
 	}
 
-	sessions, _ := st.ListSessions(context.Background(), "", 10)
+	sessions, _ := st.ListSessions(context.Background(), "default", 10)
 	if len(sessions) != 0 {
 		t.Fatalf("未同意的请求不应创建会话, 实际 %d 条", len(sessions))
 	}
@@ -128,7 +128,7 @@ func TestCreateSessionRecordsConsentEvidence(t *testing.T) {
 
 	status, body := createSession(t, ts.URL, map[string]any{
 		"round": 3, "minutes": 40, "candidate_id": "c_1001",
-		"consent_recording": true,
+		"consent_recording": true, "consent_scoring": true,
 	})
 	if status != http.StatusOK {
 		t.Fatalf("创建会话应返回 200, 实际 %d (%v)", status, body)
@@ -138,7 +138,7 @@ func TestCreateSessionRecordsConsentEvidence(t *testing.T) {
 		t.Fatal("响应里应包含 session_id")
 	}
 
-	consents, err := st.ListConsents(context.Background(), id)
+	consents, err := st.ListConsents(context.Background(), "default", id)
 	if err != nil {
 		t.Fatalf("读取授权失败: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestCreateSessionValidatesRound(t *testing.T) {
 	ts, _ := newTestServer(t)
 	for _, round := range []int{0, 6, -1} {
 		status, _ := createSession(t, ts.URL, map[string]any{
-			"round": round, "consent_recording": true,
+			"round": round, "consent_recording": true, "consent_scoring": true,
 		})
 		if status != http.StatusBadRequest {
 			t.Fatalf("轮次 %d 应被拒绝, 实际状态码 %d", round, status)
@@ -181,7 +181,7 @@ func TestStaticFrontendIsServed(t *testing.T) {
 
 func TestReportEndpointReturns404BeforeFinish(t *testing.T) {
 	ts, _ := newTestServer(t)
-	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "consent_recording": true})
+	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "consent_recording": true, "consent_scoring": true})
 	id := body["session_id"].(string)
 
 	resp, err := http.Get(ts.URL + "/api/v1/sessions/" + id + "/report")
@@ -197,7 +197,7 @@ func TestReportEndpointReturns404BeforeFinish(t *testing.T) {
 func TestInterviewWebSocketRunsFullSessionAndPersists(t *testing.T) {
 	ts, st := newTestServer(t)
 	_, body := createSession(t, ts.URL, map[string]any{
-		"round": 1, "minutes": 45, "candidate_id": "c_1001", "consent_recording": true,
+		"round": 1, "minutes": 45, "candidate_id": "c_1001", "consent_recording": true, "consent_scoring": true,
 	})
 	id := body["session_id"].(string)
 
@@ -225,7 +225,7 @@ func TestInterviewWebSocketRunsFullSessionAndPersists(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sess, err := st.GetSession(ctx, id)
+	sess, err := st.GetSession(ctx, "default", id)
 	if err != nil {
 		t.Fatalf("读取会话失败: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestInterviewWebSocketRunsFullSessionAndPersists(t *testing.T) {
 		t.Fatal("会话应记录 AI 建议结论")
 	}
 
-	turns, _ := st.ListTurns(ctx, id)
+	turns, _ := st.ListTurns(ctx, "default", id)
 	if len(turns) < 5 {
 		t.Fatalf("应落库多轮问答, 实际 %d 轮", len(turns))
 	}
@@ -249,7 +249,7 @@ func TestInterviewWebSocketRunsFullSessionAndPersists(t *testing.T) {
 		}
 	}
 
-	if _, err := st.GetReport(ctx, id); err != nil {
+	if _, err := st.GetReport(ctx, "default", id); err != nil {
 		t.Fatalf("应保存报告: %v", err)
 	}
 }
@@ -257,7 +257,7 @@ func TestInterviewWebSocketRunsFullSessionAndPersists(t *testing.T) {
 // 断线重连: 断开后重新连上, 必须从断点继续, 而不是从头再问一遍。
 func TestInterviewResumesAfterDisconnect(t *testing.T) {
 	ts, st := newTestServer(t)
-	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true})
+	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true, "consent_scoring": true})
 	id := body["session_id"].(string)
 
 	conn := dialWS(t, ts, id)
@@ -274,7 +274,7 @@ func TestInterviewResumesAfterDisconnect(t *testing.T) {
 	_ = conn.Close()
 
 	// 服务端不保存内存态: 重放完全依赖已落库的问答记录。
-	turns, err := st.ListTurns(context.Background(), id)
+	turns, err := st.ListTurns(context.Background(), "default", id)
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("断开前应落库 2 轮问答, 实际 %d 轮 (err=%v)", len(turns), err)
 	}
@@ -344,7 +344,7 @@ func TestCheckpointWrittenDuringInterviewAndClearedAtEnd(t *testing.T) {
 	ts := httptest.NewServer(NewServer(Config{Store: st, Checkpoint: ckpt}).Handler())
 	defer ts.Close()
 
-	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true})
+	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true, "consent_scoring": true})
 	id := body["session_id"].(string)
 
 	conn := dialWS(t, ts, id)
@@ -370,7 +370,7 @@ func TestCheckpointWrittenDuringInterviewAndClearedAtEnd(t *testing.T) {
 
 func TestReconnectingToFinishedSessionReturnsReport(t *testing.T) {
 	ts, _ := newTestServer(t)
-	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true})
+	_, body := createSession(t, ts.URL, map[string]any{"round": 1, "minutes": 45, "consent_recording": true, "consent_scoring": true})
 	id := body["session_id"].(string)
 
 	conn := dialWS(t, ts, id)
@@ -441,7 +441,7 @@ func TestParseResumeEndpoint(t *testing.T) {
 func TestSessionListUsesSnakeCaseJSON(t *testing.T) {
 	ts, _ := newTestServer(t)
 	if _, body := createSession(t, ts.URL, map[string]any{
-		"round": 1, "minutes": 30, "consent_recording": true,
+		"round": 1, "minutes": 30, "consent_recording": true, "consent_scoring": true,
 		"position": "高级后端工程师", "company": "示例科技",
 		"resume_text": "技能: Go\n项目经历\n- IM 平台 2023.06 - 2024.03",
 	}); body["session_id"] == nil {
