@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/account"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/api"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/auth"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/knowledge"
@@ -66,6 +67,10 @@ func main() {
 		"WebRTC ICE 服务器, 逗号分隔(如 stun:stun.example.com:3478,turn:turn.example.com:3478)")
 	retentionDays := flag.Int("retention-days", envInt("RECORDING_RETENTION_DAYS", 90),
 		"面试录制件保留天数, 到期后由清理任务删除")
+	adminInvite := flag.String("admin-invite-code", os.Getenv("ADMIN_INVITE_CODE"),
+		"企业成员(管理员/面试官)注册邀请码; 留空表示只能由管理员在后台创建账号")
+	faceLogin := flag.Bool("face-login", defaultEnv("FACE_LOGIN", "on") != "off",
+		"是否允许人脸登录(需要先在个人中心录入)")
 	healthcheck := flag.String("healthcheck", "",
 		"容器健康检查模式: 传入一个 URL, 探测成功则退出码 0")
 	logLevel := flag.String("log-level", defaultEnv("LOG_LEVEL", "info"), "日志级别 debug/info/warn/error")
@@ -94,6 +99,7 @@ func main() {
 			otlpEndpoint: *otlpEndpoint, logLevel: *logLevel, logFormat: *logFormat,
 			recordingDir: *recordingDir, sandboxEngine: *sandboxEngine,
 			iceServers: *iceServers, retentionDays: *retentionDays,
+			adminInvite: *adminInvite, faceLogin: *faceLogin,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
 			os.Exit(1)
@@ -382,6 +388,8 @@ type serverOptions struct {
 	sandboxEngine string
 	iceServers    string
 	retentionDays int
+	adminInvite   string
+	faceLogin     bool
 }
 
 // runServer 启动 Web 服务。
@@ -443,6 +451,13 @@ func runServer(opts serverOptions) error {
 	if err != nil {
 		return err
 	}
+
+	// 账号体系: 人用的登录入口。
+	//
+	// 账号库优先复用 MySQL 连接(有 MySQL 时账号才会在重启后保留);
+	// 没有 MySQL 时退化为内存实现, 并明确告警 —— "注册完重启就登不上"
+	// 是很容易被忽略、但用户一定会遇到的问题。
+	accounts := openAccountService(sessionStore, secret, opts, logger)
 	if !opts.requireAuth {
 		logger.Warn("鉴权已关闭(演示模式): 任何调用方都能读取本租户的数据。" +
 			"生产环境请配置 MYSQL_DSN 并设置 APP_SECRET, 或显式开启 -require-auth")
@@ -504,6 +519,7 @@ func runServer(opts serverOptions) error {
 		ICEServers:         parseICEServers(opts.iceServers),
 		Pingers:            buildPingers(tts, asr, embedder, llm.FromEnv()),
 		StoreKind:          storeKind(sessionStore),
+		Accounts:           accounts,
 		Logger:             logger,
 		Metrics:            metrics,
 		TenantID:           opts.tenantID,
@@ -573,6 +589,79 @@ func openKeyStore(sessionStore store.SessionStore, requireAuth bool, tenantID st
 		ks = mem
 	}
 	return ks, nil
+}
+
+// openAccountService 组装账号服务。
+//
+// 三条规则:
+//  1. 有 MySQL 就用它 —— 账号必须跨重启存活;
+//  2. 企业成员注册必须有邀请码; 演示模式下若没配, 就生成一个并打印一次,
+//     否则本地根本没人能进工作台;
+//  3. 候选人注册始终开放(他们通常是通过面试链接过来的), 不需要邀请码。
+func openAccountService(
+	sessionStore store.SessionStore,
+	secret []byte,
+	opts serverOptions,
+	logger *slog.Logger,
+) *account.Service {
+	var accStore account.Store
+	if my, ok := sessionStore.(*store.MySQLStore); ok {
+		accStore = account.NewMySQLStore(my.DB())
+		logger.Info("账号存储: MySQL(重启后保留)")
+	} else {
+		accStore = account.NewMemoryStore()
+		logger.Warn("账号存储: 内存(重启后账号会丢失, 仅适合本地演示); 配置 MYSQL_DSN 可保留")
+	}
+
+	invite := strings.TrimSpace(opts.adminInvite)
+	if invite == "" && !opts.requireAuth {
+		// 演示模式: 没有邀请码就没法注册管理员, 那本地连工作台都进不去。
+		// 生成一个并打印, 与"引导用 API Key"的处理方式一致。
+		token, err := account.RandomToken(4)
+		if err == nil {
+			invite = "HR-" + strings.ToUpper(token)
+			fmt.Fprintf(os.Stderr,
+				"\n[interviewd] 演示模式: 企业成员注册邀请码(仅本次进程有效): %s\n"+
+					"[interviewd] 用它注册管理员账号即可进入招聘工作台; 生产请设置 ADMIN_INVITE_CODE\n\n",
+				invite)
+		}
+	}
+
+	matcher := account.Matcher(account.NewLocalMatcher())
+	if !opts.faceLogin {
+		logger.Info("人脸登录已关闭(-face-login=off): 仍可用密码登录")
+	}
+	svc := account.New(account.Config{
+		Store:           accStore,
+		TenantID:        opts.tenantID,
+		AdminInviteCode: invite,
+		Secret:          secret,
+		Matcher:         matcher,
+		Logger:          logger,
+	})
+	info := svc.MatcherInfo()
+	logger.Info("人脸匹配器已就绪",
+		slog.String("matcher", fmt.Sprint(info["name"])),
+		slog.String("assurance", fmt.Sprint(info["assurance"])),
+		slog.Float64("threshold", toFloat(info["threshold"])))
+	if fmt.Sprint(info["assurance"]) != "certified" {
+		logger.Warn("当前人脸能力是开发级(图像相似度), 不是认证级人脸识别; " +
+			"生产请接入云厂商人脸 API 或本地 SDK(实现 account.Matcher 即可)")
+	}
+	return svc
+}
+
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
 }
 
 func randomSecret() []byte {

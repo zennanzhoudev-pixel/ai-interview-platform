@@ -96,40 +96,90 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 //
 // 租户只能来自凭据, 绝不能来自请求参数 —— 否则"多租户隔离"就只是一句
 // 写在文档里的话。
+//
+// 它同时接受两种身份, 因为它们代表两种调用方:
+//   - API Key: 机器(客户的 ATS 集成), 一次配置长期使用;
+//   - 账号会话: 人(招聘同学/面试官), 有登录与退出, 可被单独停权。
+//
+// 只有一种身份是不够的: 只认 API Key, 人就无法登录; 只认账号,
+// 系统集成就得让某个人的账号去跑后台任务 —— 那既无法追责也不可撤销。
 func (s *Server) withPermission(perm auth.Permission, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.RequireAuth {
-			// 本地演示模式: 单租户、全权限。生产必须关掉这个开关。
+			// 本地演示模式: 未开启鉴权时放行。生产必须关掉这个开关。
+			//
+			// 但即便在演示模式, 只要浏览器带着登录会话, 就按该账号的租户与
+			// 角色走 —— 否则"用账号 A 登录后看到的却是默认租户的数据",
+			// 会让人误以为多租户隔离已经生效。
+			if user, err := s.currentAccount(r); err == nil {
+				ctx := platform.WithActor(platform.WithTenant(r.Context(), user.TenantID), "user:"+user.ID)
+				next(w, r.WithContext(ctx))
+				return
+			}
 			ctx := platform.WithActor(platform.WithTenant(r.Context(), s.cfg.TenantID), "demo")
 			next(w, r.WithContext(ctx))
 			return
 		}
 
-		principal, err := s.principalFromRequest(r)
-		if err != nil {
-			reason := "missing"
-			if !errors.Is(err, errNoCredential) {
-				reason = "invalid"
+		// 1) 优先按机器身份(API Key)处理: 集成方调用时不应依赖浏览器 Cookie。
+		if raw := bearerToken(r); raw != "" {
+			if s.cfg.Keys == nil {
+				s.rejectAuth(w, r, perm, "invalid", "")
+				return
 			}
-			s.metrics.AuthFailures.WithLabelValues(reason).Inc()
-			s.logger.WarnContext(r.Context(), "认证失败",
-				append(platform.AuditAttrs(r.Context()), slog.String("reason", reason))...)
-			writeError(w, http.StatusUnauthorized, "缺少或无效的 API Key")
-			return
-		}
-		if !principal.Can(perm) {
-			s.metrics.AuthFailures.WithLabelValues("forbidden").Inc()
-			s.logger.WarnContext(r.Context(), "权限不足",
-				append(platform.AuditAttrs(r.Context()),
-					slog.String("required", string(perm)),
-					slog.String("role", string(principal.Role)))...)
-			writeError(w, http.StatusForbidden, "当前角色无权执行该操作")
+			ctx, cancel := s.storeCtx(r.Context())
+			principal, err := s.cfg.Keys.Resolve(ctx, raw)
+			cancel()
+			if err != nil {
+				s.rejectAuth(w, r, perm, "invalid", "")
+				return
+			}
+			if !principal.Can(perm) {
+				s.rejectAuth(w, r, perm, "forbidden", string(principal.Role))
+				return
+			}
+			ctx = platform.WithActor(platform.WithTenant(r.Context(), principal.TenantID), principal.String())
+			next(w, r.WithContext(ctx))
 			return
 		}
 
-		ctx := platform.WithActor(platform.WithTenant(r.Context(), principal.TenantID), principal.String())
-		next(w, r.WithContext(ctx))
+		// 2) 再按人的身份(登录会话)处理。
+		if s.cfg.Accounts != nil {
+			if user, err := s.currentAccount(r); err == nil {
+				if !auth.RoleCan(user.Role, perm) {
+					s.rejectAuth(w, r, perm, "forbidden", string(user.Role))
+					return
+				}
+				ctx := platform.WithActor(platform.WithTenant(r.Context(), user.TenantID), "user:"+user.ID)
+				next(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		s.rejectAuth(w, r, perm, "missing", "")
 	})
+}
+
+// rejectAuth 统一处理认证/授权失败: 打点、记日志、给出响应。
+//
+// 抽出来是因为两条身份路径 + 三种失败原因(缺凭据/凭据无效/权限不足)
+// 如果在各处分别写, 迟早会漏掉某一处的审计 —— 而"谁在什么时候被拒绝过"
+// 恰恰是排查越权尝试时最需要的信息。
+func (s *Server) rejectAuth(w http.ResponseWriter, r *http.Request, perm auth.Permission, reason, role string) {
+	s.metrics.AuthFailures.WithLabelValues(reason).Inc()
+	attrs := append(platform.AuditAttrs(r.Context()),
+		slog.String("required", string(perm)),
+		slog.String("reason", reason))
+	if role != "" {
+		attrs = append(attrs, slog.String("role", role))
+	}
+	s.logger.WarnContext(r.Context(), "认证或授权失败", attrs...)
+	switch reason {
+	case "forbidden":
+		writeError(w, http.StatusForbidden, "当前角色无权执行该操作")
+	default:
+		writeError(w, http.StatusUnauthorized, "缺少或无效的凭据: 请登录, 或提供 API Key")
+	}
 }
 
 var errNoCredential = errors.New("api: 缺少凭据")

@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/account"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/auth"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/knowledge"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
@@ -74,6 +75,10 @@ type Config struct {
 	Pingers map[string]ProviderPing
 	// StoreKind 是存储后端的展示名(用于自检面板如实说明"数据存在哪")。
 	StoreKind string
+	// Accounts 是账号体系(注册/登录/人脸/个人中心)。
+	// 为 nil 时这些接口返回 503, 而基于 API Key 与面试会话令牌的
+	// 既有能力不受影响 —— 账号是"给人用的入口", 不是系统运行的前提。
+	Accounts *account.Service
 
 	Logger     *slog.Logger
 	Metrics    *observability.Metrics
@@ -280,6 +285,27 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/candidate/recording/chunks", s.handleCandidateRecordingChunk)
 	s.mux.HandleFunc("POST /api/v1/candidate/recording/finalize", s.handleCandidateRecordingFinalize)
 	s.mux.HandleFunc("POST /api/v1/candidate/code/run", s.handleCandidateCodeRun)
+
+	// 账号体系: 注册、登录、人脸、个人中心。
+	//
+	// 这些接口**不走 withPermission**: 它们本身就是"取得身份"的动作,
+	// 用 API Key 才能调用的话, 人就没法登录了。
+	s.mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
+	s.mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/v1/auth/face/login", s.handleFaceLogin)
+	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	s.mux.HandleFunc("GET /api/v1/auth/me", s.handleMe)
+	s.mux.Handle("POST /api/v1/auth/password",
+		s.withAccount(auth.PermSelfService, s.handleChangePassword))
+	s.mux.Handle("POST /api/v1/auth/face/enroll",
+		s.withAccount(auth.PermSelfService, s.handleFaceEnroll))
+	s.mux.Handle("DELETE /api/v1/auth/face",
+		s.withAccount(auth.PermSelfService, s.handleFaceDelete))
+	s.mux.Handle("GET /api/v1/auth/accounts",
+		s.withPermission(auth.PermKeyAdmin, s.handleAccounts))
+	// 候选人的历史面试记录: 只能看到与自己引用值匹配的那些会话。
+	s.mux.Handle("GET /api/v1/candidate/history",
+		s.withAccount(auth.PermSelfService, s.handleCandidateHistory))
 
 	// 静态资源挂在根路径。Go 1.22 的 ServeMux 优先匹配更具体的模式,
 	// 所以 /api 与 /ws 不会被这里吞掉。

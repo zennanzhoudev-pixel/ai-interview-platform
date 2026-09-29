@@ -33,6 +33,13 @@ const (
 	RoleInterviewer Role = "interviewer"
 	// RoleScheduler 是 ATS 集成用的系统账号: 创建面试、读取报告结论。
 	RoleScheduler Role = "scheduler"
+	// RoleCandidate 是候选人本人。
+	//
+	// 它和其它三个角色的性质不同: 前三个是"企业内部的人", 拥有跨候选人的
+	// 数据权限; 候选人只能看到属于自己的那些记录。把候选人放进同一张
+	// 权限矩阵里, 是为了让"谁能看到什么"只有一处定义 —— 否则候选人侧
+	// 的越权只能靠每个 handler 自己记得检查。
+	RoleCandidate Role = "candidate"
 )
 
 // Permission 是细粒度权限点。
@@ -73,6 +80,13 @@ const (
 	// 但绝不应该能出现在候选人的摄像头前 —— 那需要的是对人的责任,
 	// 而不是一个系统集成权限。
 	PermInterviewObserve Permission = "interview:observe"
+	// PermSelfService 管理自己的账号与数据: 个人中心、人脸录入、
+	// 查看自己的历史面试记录。
+	//
+	// 单独成权限点而不是复用 recruit:read: 候选人能看到自己的报告,
+	// 但绝不应该能看到别人的 —— 这两件事在权限模型里必须是两个不同的点,
+	// 否则"给候选人加一个查看历史的功能"就等于把整个招聘数据面打开。
+	PermSelfService Permission = "self:service"
 )
 
 // rolePermissions 是角色到权限的映射。
@@ -87,17 +101,53 @@ var rolePermissions = map[Role]map[Permission]bool{
 		PermCandidateWrite: true, PermScheduleWrite: true, PermRecordingRead: true,
 		PermCodeRun: true, PermRecruitRead: true,
 		PermInterviewObserve: true,
+		PermSelfService:      true,
 	},
 	RoleInterviewer: {
 		PermReportRead: true, PermScoreOverride: true, PermAnalyticsRead: true,
 		PermAuditRead: true, PermScheduleWrite: true, PermCandidateWrite: true,
 		PermCodeRun: true, PermRecruitRead: true,
 		PermInterviewObserve: true,
+		PermSelfService:      true,
 	},
 	RoleScheduler: {
 		PermSessionCreate: true, PermReportRead: true, PermJobWrite: true,
 		PermCandidateWrite: true, PermScheduleWrite: true, PermRecruitRead: true,
+		PermSelfService: true,
 	},
+	RoleCandidate: {
+		// 候选人只有"看自己那一份"的能力。面试作答走的是会话令牌
+		// (由招聘方发起面试时签发), 不需要额外的管理权限。
+		PermSelfService: true,
+	},
+}
+
+// RoleCan 判断某个角色是否具备权限。
+//
+// 导出它是为了让账号体系(注册、登录、路由)复用同一份权限矩阵 ——
+// "登录后进哪个界面"和"这个接口能不能调"必须由同一个定义回答,
+// 否则迟早出现"前端把人放进去了, 后端才拒绝"的错位。
+func RoleCan(role Role, perm Permission) bool {
+	perms, ok := rolePermissions[role]
+	if !ok {
+		return false
+	}
+	return perms[perm]
+}
+
+// RoleValid 判断角色取值是否合法(用于注册时校验, 防止有人注册成任意角色)。
+func RoleValid(role Role) bool {
+	_, ok := rolePermissions[role]
+	return ok
+}
+
+// StaffRole 判断角色是否属于"企业内部成员"(可以进入工作台)。
+func StaffRole(role Role) bool {
+	switch role {
+	case RoleAdmin, RoleInterviewer, RoleScheduler:
+		return true
+	}
+	return false
 }
 
 // Principal 是通过认证的调用主体。

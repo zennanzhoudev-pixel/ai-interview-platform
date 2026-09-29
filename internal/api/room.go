@@ -210,7 +210,7 @@ func (s *Server) handleObserverTicket(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt := time.Now().Add(s.cfg.ObserverTicketTTL)
 	ticket, err := auth.IssueSessionToken(s.cfg.Secret, auth.SessionToken{
-		SessionID: sessionID, TenantID: tenant, ExpiresAt: expiresAt, Role: auth.RoleObserver,
+		SessionID: sessionID, TenantID: tenant, ExpiresAt: expiresAt, Role: auth.TokenRoleObserver,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "签发旁听票据失败")

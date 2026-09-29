@@ -325,7 +325,7 @@ func (s *Server) authorizeObserver(r *http.Request) (store.Session, error) {
 		s.metrics.AuthFailures.WithLabelValues("observer_ticket").Inc()
 		return store.Session{}, err
 	}
-	if claims.TokenRole() != auth.RoleObserver {
+	if claims.TokenRole() != auth.TokenRoleObserver {
 		s.metrics.AuthFailures.WithLabelValues("observer_role").Inc()
 		return store.Session{}, errors.New("api: 票据角色不是旁听席")
 	}

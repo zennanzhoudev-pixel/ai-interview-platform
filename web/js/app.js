@@ -13,6 +13,9 @@ import {
   renderSystem, disconnectConsole,
 } from './console.js';
 import { renderObserverRoom } from './observer.js';
+import {
+  loadMe, currentUser, logout, renderAuthPage, renderProfile, renderCandidateHistory,
+} from './auth.js';
 
 const main = document.getElementById('main');
 
@@ -100,38 +103,65 @@ function renderShell(path) {
 
   const shell = document.getElementById('shellSwitch');
   clear(shell);
-  shell.append(el('button', {
-    class: 'btn ghost small',
-    text: inConsole || inObserver ? '切换候选人空间' : '切换招聘工作台',
-    onclick: () => navigate(inConsole || inObserver ? '/candidate' : '/console/dashboard'),
-  }));
+  // 用真实身份渲染页头: 显示"我是谁", 并提供个人中心与退出登录。
+  // 之前的页头是写死的"访客", 登录后也看不出身份 —— 那会让人怀疑
+  // 自己到底有没有登录成功。
+  const user = currentUser();
+  if (user) {
+    shell.append(
+      el('button', {
+        class: 'btn ghost small',
+        text: inConsole || inObserver ? '切换候选人空间' : '切换招聘工作台',
+        onclick: () => navigate(inConsole || inObserver ? '/candidate' : '/console/dashboard'),
+      }),
+      el('button', { class: 'nav-link', text: '个人中心', onclick: () => navigate('/profile') }),
+      el('button', { class: 'nav-link', text: '退出登录', onclick: () => logout() }),
+    );
+  } else {
+    shell.append(el('button', {
+      class: 'btn primary small',
+      text: '登录 / 注册',
+      onclick: () => navigate('/login'),
+    }));
+  }
 
   const avatar = document.getElementById('navAvatar');
   const menuName = document.getElementById('menuName');
   const menuRole = document.getElementById('menuRole');
   const apiKey = store.get('apiKey', '');
-  if (inConsole || inObserver) {
-    const name = apiKey ? '工作台' : '访客';
-    if (avatar) avatar.textContent = apiKey ? '台' : '访';
-    if (menuName) menuName.textContent = name;
-    if (menuRole) menuRole.textContent = apiKey ? '已用企业密钥连接' : '未连接密钥(可能为演示模式)';
+  if (user) {
+    const u = user.user || {};
+    if (avatar) avatar.textContent = (u.name || '我').slice(0, 1);
+    if (menuName) menuName.textContent = u.name || '我的账号';
+    if (menuRole) {
+      menuRole.textContent = `${user.staff ? '企业成员' : '候选人'} · ${u.email || u.phone || ''}`;
+    }
+  } else if (inConsole && apiKey) {
+    if (avatar) avatar.textContent = '台';
+    if (menuName) menuName.textContent = '工作台(API Key)';
+    if (menuRole) menuRole.textContent = '已用企业密钥连接';
   } else {
-    if (avatar) avatar.textContent = '候';
-    if (menuName) menuName.textContent = '候选人';
-    if (menuRole) menuRole.textContent = hasCandidateSession() ? '已用面试链接进入' : '尚未进入任何面试';
+    if (avatar) avatar.textContent = '访';
+    if (menuName) menuName.textContent = '未登录';
+    if (menuRole) menuRole.textContent = hasCandidateSession() ? '已用面试链接进入' : '请登录或使用面试链接';
   }
 }
 
 /* ---------------- 路由表 ---------------- */
 
 const routes = [
-  { path: '/', render: () => navigate(hasCandidateSession() ? '/candidate' : '/about') },
+  { path: '/', render: () => navigate(homePath()) },
   { path: '/about', render: () => renderAbout(main) },
+  { path: '/login', render: () => renderAuthPage(main, 'login') },
+  { path: '/register', render: () => renderAuthPage(main, 'register') },
+  { path: '/face', render: () => renderAuthPage(main, 'face') },
+  { path: '/profile', render: () => renderProfile(main) },
 
-  { path: '/candidate', render: () => renderOverview(main) },
-  { path: '/candidate/prep', render: () => renderPrep(main) },
-  { path: '/candidate/room', render: () => renderRoom(main) },
-  { path: '/candidate/report', render: () => renderCandidateReport(main) },
+  { path: '/candidate', render: () => withCandidate(() => renderOverview(main)) },
+  { path: '/candidate/prep', render: () => withCandidate(() => renderPrep(main)) },
+  { path: '/candidate/room', render: () => withCandidate(() => renderRoom(main)) },
+  { path: '/candidate/report', render: () => withCandidate(() => renderCandidateReport(main)) },
+  { path: '/candidate/history', render: () => withCandidate(() => renderCandidateHistory(main)) },
 
   { path: '/console', render: () => (ensureConsoleKey() ? navigate('/console/dashboard') : renderKeyGate(main)) },
   { path: '/console/dashboard', render: () => withConsole(() => renderDashboard(main)) },
@@ -147,24 +177,53 @@ const routes = [
   { path: '/observer/:id', render: (params) => renderObserverRoom(main, params.id) },
 ];
 
-// withConsole 在渲染工作台视图前确保 API Key 已注入。
+// withConsole 保证只有企业成员能进入招聘工作台。
+//
+// 这是"登录后按角色分流"的后半段: 服务端负责"登录后去哪",
+// 前端负责"手输地址也进不去"。两道都要有 —— 只靠服务端返回的话,
+// 候选人把地址改成 /console/dashboard 仍然能看到界面框架。
 function withConsole(render) {
-  if (!ensureConsoleKey()) {
-    // 未开启鉴权的服务(本地演示)不该先逼用户去找一个密钥 ——
-    // 任何一个管理接口都能通过, 说明这就是演示模式。
-    if (store.get('demoMode', false)) {
-      render();
+  const user = currentUser();
+  if (user) {
+    if (!user.staff) {
+      // 候选人访问管理界面: 明确告知并送回自己的空间, 而不是给一个空白页。
+      toast('这是招聘工作台, 候选人账号无法进入', 'error');
+      navigate('/candidate');
       return;
     }
-    api.get('/api/v1/jobs')
-      .then(() => {
-        store.set('demoMode', true);
-        render();
-      })
-      .catch(() => renderKeyGate(main));
+    render();
+    return;
+  }
+  // 没登录: 先走登录页。API Key 是机器身份, 保留为集成场景的后路。
+  if (!ensureConsoleKey()) {
+    if (store.get('useApiKey', false)) {
+      renderKeyGate(main);
+      return;
+    }
+    navigate('/login');
     return;
   }
   render();
+}
+
+// withCandidate 保证候选人空间需要身份: 账号, 或者一条面试链接。
+//
+// 面试链接是刻意保留的: 候选人常常不想注册就能参加面试, 这时
+// "一次性会话令牌"才是对的凭证。两者都允许, 但两者都必须有。
+function withCandidate(render) {
+  if (currentUser() || hasCandidateSession()) {
+    render();
+    return;
+  }
+  navigate('/login');
+}
+
+// homePath 决定"打开站点默认去哪": 已登录按角色走, 否则先去登录页。
+export function homePath() {
+  const user = currentUser();
+  if (user) return user.staff ? '/console/dashboard' : '/candidate';
+  if (hasCandidateSession()) return '/candidate';
+  return '/login';
 }
 
 function notFound(segments) {
@@ -355,7 +414,10 @@ function wireAvatarMenu() {
           navigate('/about');
           break;
         case 'profile':
-          navigate('/candidate/report');
+          navigate('/profile');
+          break;
+        case 'history':
+          navigate('/candidate/history');
           break;
         case 'console':
           navigate('/console/dashboard');
@@ -364,10 +426,14 @@ function wireAvatarMenu() {
           navigate('/candidate');
           break;
         case 'signout':
+          // 两种身份一起退: 账号会话(服务端可撤销) 与面试链接令牌(本地)。
+          // 只退一种会留下"看起来退出了、其实还能进"的状态。
           signOutCandidate();
           disconnectConsole();
-          toast('已退出当前身份');
-          navigate('/about');
+          logout();
+          break;
+        case 'login':
+          navigate('/login');
           break;
         case 'redetect':
           checkService().then((ok) => toast(ok ? '服务正常' : serviceState.reason, ok ? 'info' : 'error'));
@@ -394,11 +460,13 @@ function boot() {
   startServiceWatch();
   wireAvatarMenu();
 
-  // 路由负责渲染视图, 外壳负责高亮导航 —— 两者都在 hash 变化时更新。
-  // createRouter 内部会先解析一次当前 hash, 因此这里只需处理外壳。
-  createRouter(routes, notFound);
-  window.addEventListener('hashchange', () => renderShell(currentPath()));
-  renderShell(currentPath());
+  // 先确认登录状态再解析路由: 否则刷新页面时会先渲染出候选人空间,
+  // 几百毫秒后才跳去登录页 —— 那一瞬间的闪烁会让人以为"没登录也能进"。
+  loadMe().finally(() => {
+    createRouter(routes, notFound);
+    window.addEventListener('hashchange', () => renderShell(currentPath()));
+    renderShell(currentPath());
+  });
 }
 
 function currentPath() {

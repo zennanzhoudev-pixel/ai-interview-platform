@@ -574,6 +574,37 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
   border-top: 1px solid var(--line); margin-top: 40px;
 }
 
+/* ---------- 登录 / 注册 / 个人中心 ----------
+   账号页是系统入口, 因此排版要比内页更"稳": 左说明右表单,
+   窄屏自动堆叠。 */
+.auth-shell {
+  display: grid; grid-template-columns: 1fr minmax(360px, 460px);
+  gap: 40px; align-items: start; margin-top: 24px;
+}
+.auth-intro h1 { margin-bottom: 14px; }
+.auth-intro .doc-list { margin-top: 18px; }
+.auth-card { margin-bottom: 0; }
+.auth-tabs { display: flex; gap: 6px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.auth-tab {
+  background: none; border: 0; padding: 10px 14px; color: var(--ink-2);
+  font-size: 14.5px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.auth-tab.is-active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.auth-body { display: grid; gap: 6px; }
+.face-capture { margin: 14px 0; max-width: 420px; }
+.profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }
+.profile-grid .card { margin-bottom: 0; }
+/* 行内的"改用 API Key 连接"入口: 它是一次跳转, 但出现在句子里,
+   所以用链接样式而不是按钮。 */
+.link-btn {
+  background: none; border: 0; padding: 0; color: var(--accent);
+  font: inherit; text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .auth-shell { grid-template-columns: 1fr; gap: 24px; }
+}
+
 .toast[data-kind="error"] { background: #7a2828; }
 .toast[data-kind="info"] { background: var(--dark); }
 

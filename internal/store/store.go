@@ -218,6 +218,13 @@ type SessionStore interface {
 	FinishSession(ctx context.Context, s Session, r Report) error
 	GetSession(ctx context.Context, tenantID, sessionID string) (Session, error)
 	ListSessions(ctx context.Context, tenantID string, limit int) ([]Session, error)
+	// ListSessionsByCandidate 按候选人引用值列出会话。
+	//
+	// 这条查询支撑"候选人登录后回看自己的历史面试"。它不能靠
+	// "取出全部会话再过滤"来实现: 那既要读全租户的数据, 又把
+	// 过滤逻辑放在调用方 —— 一旦某处忘了过滤, 就是把别人的面试
+	// 记录给了当前候选人。
+	ListSessionsByCandidate(ctx context.Context, tenantID, candidateRef string, limit int) ([]Session, error)
 
 	// AppendTurn 追加一次问答。
 	// 重复投递同一个 Index 必须是幂等的 —— 消息队列至少一次投递是常态。

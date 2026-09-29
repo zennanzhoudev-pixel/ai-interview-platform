@@ -227,3 +227,62 @@ CREATE TABLE IF NOT EXISTS interview_recording (
   KEY idx_tenant_session (tenant_id, session_id),
   KEY idx_retention (delete_after)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='面试录制件元数据';
+
+-- ---------------------------------------------------------------------------
+-- 账号体系: 注册、登录、人脸、登录会话
+--
+-- 与 tenant_api_key 的区别: API Key 是"机器身份"(客户的 ATS 集成),
+-- 这张表是"人的身份"。两者不能合并 —— 人需要登录、退出、改密码、
+-- 单独停权与追责, 而这些语义放在 API Key 上会很别扭(而且无法回答
+-- "这次操作是哪个同事做的")。
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS account_user (
+  user_id        VARCHAR(64)  NOT NULL,
+  tenant_id      VARCHAR(64)  NOT NULL COMMENT '租户, 分片键',
+  name           VARCHAR(64)  NOT NULL DEFAULT '',
+  -- email/phone 用 NULL 而不是空串: (tenant_id, email) 是唯一键,
+  -- 而 MySQL 唯一索引把空串当成一个具体值 —— 用空串会让第二个
+  -- "只填手机号"的用户插入失败, 报的还是"邮箱已注册"。
+  email          VARCHAR(191) NULL COMMENT '登录标识之一, 已规范化(小写去空格)',
+  phone          VARCHAR(32)  NULL COMMENT '登录标识之二, 已规范化(+86...)',
+  role           VARCHAR(32)  NOT NULL COMMENT 'admin/interviewer/scheduler/candidate',
+  password_hash  VARCHAR(255) NOT NULL COMMENT 'pbkdf2-sha256$迭代次数$盐$派生密钥, 明文不落库',
+  face_enrolled  TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否已录入人脸(模板在 account_face)',
+  status         VARCHAR(16)  NOT NULL DEFAULT 'active' COMMENT 'active/disabled',
+  created_at     DATETIME(3)  NOT NULL,
+  updated_at     DATETIME(3)  NOT NULL,
+  last_login_at  DATETIME(3)  NULL,
+  PRIMARY KEY (user_id),
+  UNIQUE KEY uk_tenant_email (tenant_id, email),
+  UNIQUE KEY uk_tenant_phone (tenant_id, phone),
+  KEY idx_tenant_created (tenant_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='账号(人)';
+
+CREATE TABLE IF NOT EXISTS account_face (
+  tenant_id  VARCHAR(64)  NOT NULL,
+  user_id    VARCHAR(64)  NOT NULL,
+  template   MEDIUMBLOB   NOT NULL COMMENT '特征向量(float32 小端连续), 不存原始照片',
+  dim        INT          NOT NULL DEFAULT 0,
+  matcher    VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '生成模板的匹配器',
+  assurance  VARCHAR(32)  NOT NULL DEFAULT '' COMMENT '可信级别, 如实标注',
+  quality    DOUBLE       NOT NULL DEFAULT 0,
+  frames     INT          NOT NULL DEFAULT 0 COMMENT '录入时使用的帧数',
+  enrolled_at DATETIME(3) NOT NULL,
+  updated_at  DATETIME(3) NOT NULL,
+  PRIMARY KEY (tenant_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='人脸模板(生物特征)';
+
+CREATE TABLE IF NOT EXISTS account_login (
+  token_hash CHAR(43)     NOT NULL COMMENT 'sha256(令牌) 的 base64url, 明文只在签发时返回',
+  tenant_id  VARCHAR(64)  NOT NULL,
+  user_id    VARCHAR(64)  NOT NULL,
+  role       VARCHAR(32)  NOT NULL,
+  ip         VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '来源网段, 已脱敏',
+  user_agent VARCHAR(255) NOT NULL DEFAULT '',
+  created_at DATETIME(3)  NOT NULL,
+  expires_at DATETIME(3)  NOT NULL,
+  PRIMARY KEY (token_hash),
+  KEY idx_user (tenant_id, user_id),
+  KEY idx_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='网页登录会话(服务端可撤销)';

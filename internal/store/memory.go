@@ -123,6 +123,31 @@ func (m *MemoryStore) ListSessions(_ context.Context, tenantID string, limit int
 	return out, nil
 }
 
+// ListSessionsByCandidate 按候选人引用值列出会话(候选人回看历史用)。
+func (m *MemoryStore) ListSessionsByCandidate(_ context.Context, tenantID, candidateRef string, limit int) ([]Session, error) {
+	if candidateRef == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Session, 0, 8)
+	for _, s := range m.sessions {
+		if s.TenantID == tenantID && s.CandidateRef == candidateRef {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (m *MemoryStore) AppendTurn(_ context.Context, t Turn) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

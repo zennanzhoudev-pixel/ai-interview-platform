@@ -32,17 +32,22 @@ type SessionToken struct {
 }
 
 // 令牌角色取值。
+//
+// 名字带 Token 前缀是有意的: 它们与 Role(账号角色, 如 auth.RoleCandidate)
+// 是两个不同维度 —— 令牌角色回答"这张票能进哪种连接", 账号角色回答
+// "这个人能做什么"。两者同名会让"候选人令牌"和"候选人账号"混在一起,
+// 而它们的权限边界完全不同。
 const (
-	// RoleCandidate 候选人本人。
-	RoleCandidate = "candidate"
-	// RoleObserver 人类面试官(旁听/接管)。
-	RoleObserver = "observer"
+	// TokenRoleCandidate 候选人本人的面试连接。
+	TokenRoleCandidate = "candidate"
+	// TokenRoleObserver 人类面试官(旁听/接管)。
+	TokenRoleObserver = "observer"
 )
 
 // TokenRole 返回令牌角色, 空值按候选人处理(兼容旧令牌)。
 func (t SessionToken) TokenRole() string {
 	if t.Role == "" {
-		return RoleCandidate
+		return TokenRoleCandidate
 	}
 	return t.Role
 }

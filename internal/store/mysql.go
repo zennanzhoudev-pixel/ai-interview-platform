@@ -262,6 +262,34 @@ func (m *MySQLStore) ListSessions(ctx context.Context, tenantID string, limit in
 	return out, rows.Err()
 }
 
+// ListSessionsByCandidate 按候选人引用值列出会话。
+func (m *MySQLStore) ListSessionsByCandidate(ctx context.Context, tenantID, candidateRef string, limit int) ([]Session, error) {
+	if candidateRef == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT `+sessionColumns+` FROM interview_session
+		 WHERE tenant_id=? AND candidate_ref=?
+		 ORDER BY created_at DESC, session_id DESC LIMIT ?`, tenantID, candidateRef, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 func (m *MySQLStore) AppendTurn(ctx context.Context, t Turn) error {
 	// 先确认会话属于该租户: 否则就是跨租户写入。
 	if _, err := m.GetSession(ctx, t.TenantID, t.SessionID); err != nil {
