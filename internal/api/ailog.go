@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/store"
 )
@@ -16,11 +17,10 @@ import (
 // 这些信息本来就存在于不同的表里(问答、报告、审计), 但散在各处就没人查;
 // 串成一条时间线之后, "事后复盘"才真的可行。
 //
-// 一个诚实的边界: **逐轮的检索命中没有落库**。追问方向确实来自检索
-// (见 internal/orchestrator/probe.go), 但系统只把检索结果用于生成追问话术,
-// 没有把它作为"证据"持久化。因此日志里能显示"这是一次追问、追问靶子是什么"
-// (来自追问话术与题目), 但不能还原当时的相似度分数。
-// 要补上这一点需要给 turn 增加一列存检索快照 —— 属于下一步工作, 不在这里假装已有。
+// 逐轮的检索快照现在真的落库了(turn.retrieval / probe_focus / probe_reference):
+// 追问方向来自 RAG 检索, 而"当时检索到了什么、分数多少"会随这一轮一起保存。
+// 这一点很关键 —— 如果只在事后重算, 日志展示的是"现在的结果"而不是
+// "当时的依据", 而复核要看的恰恰是后者。
 
 // AILogEntry 是时间线上的一条。
 type AILogEntry struct {
@@ -58,13 +58,25 @@ func (s *Server) buildAILog(sess store.Session, turns []store.Turn, report *stor
 			// 追问本身就是要复盘的: 它说明上一轮的回答被判定为"没答全"。
 			title = "第 " + intToStr(t.Index) + " 轮追问(上轮未覆盖判定要点)"
 		}
-		entries = append(entries, AILogEntry{
+		probeEntry := AILogEntry{
 			At: at, Kind: kind, Title: title, TurnID: t.Index,
 			Detail: t.Question,
 			Payload: map[string]any{
 				"question_id": t.QuestionID, "competency": t.Competency, "stage": t.Stage,
 			},
-		})
+		}
+		if t.IsProbe {
+			// 追问的依据与当时的检索命中: 这是"它凭什么问这句"的答案。
+			probeEntry.Payload["probe_focus"] = t.ProbeFocus
+			probeEntry.Payload["probe_reference"] = t.ProbeReference
+			if len(t.RetrievalJSON) > 0 {
+				var hits []orchestrator.RetrievalHit
+				if json.Unmarshal(t.RetrievalJSON, &hits) == nil {
+					probeEntry.Payload["retrieval"] = hits
+				}
+			}
+		}
+		entries = append(entries, probeEntry)
 
 		entry := AILogEntry{
 			At: at.Add(time.Duration(t.DurationMS) * time.Millisecond), Kind: "answer",

@@ -13,6 +13,21 @@ import (
 type Probe struct {
 	Focus     string // 追问的要点名
 	Reference string // 参考答案里的表述, 用于生成贴合原文的追问
+	// Hits 是这次追问决策背后的检索结果(按相关性排序的 top-N)。
+	//
+	// 为什么要把它带出来: 追问是"AI 自己选的方向", 而选方向的过程如果
+	// 不落库, 事后就只能看到"它问了这句", 看不到"它凭什么问这句"。
+	// 复核 AI 的判断时, 这个差别就是"可解释"与"只能相信"的差别。
+	Hits []RetrievalHit
+}
+
+// RetrievalHit 是一条检索结果快照。
+type RetrievalHit struct {
+	DocID      string  `json:"doc_id"`
+	QuestionID string  `json:"question_id"`
+	PointKey   string  `json:"point_key,omitempty"`
+	Text       string  `json:"text"`
+	Score      float64 `json:"score"`
 }
 
 // ProbePlanner 决定"追问什么"。
@@ -56,8 +71,8 @@ func (p *RAGProbePlanner) PlanProbe(parent Question, answer string, _ scoring.Re
 		return Probe{}, false
 	}
 
-	best := p.pickMostRelevant(parent, answer, missed)
-	return Probe{Focus: best.Key, Reference: best.Text}, true
+	best, hits := p.pickMostRelevant(parent, answer, missed)
+	return Probe{Focus: best.Key, Reference: best.Text, Hits: hits}, true
 }
 
 // pointCovered 判断回答是否覆盖了某个要点: 要点文本的 token 在回答里
@@ -82,16 +97,31 @@ func pointCovered(pt ReferencePoint, answer string) bool {
 // 检索查询是"题目 + 回答", 让相关性贴合当前上下文; 返回的文档是参考答案
 // 要点, 再过滤出其中属于"缺失"的那部分。这样追问既踩在缺口上,
 // 又由参考答案的检索排序决定优先问哪个。
-func (p *RAGProbePlanner) pickMostRelevant(parent Question, answer string, missed []ReferencePoint) ReferencePoint {
+func (p *RAGProbePlanner) pickMostRelevant(parent Question, answer string, missed []ReferencePoint) (ReferencePoint, []RetrievalHit) {
 	if p.retriever == nil {
-		return missed[0]
+		return missed[0], nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 	results, err := p.retriever.Search(ctx, parent.Text+" "+answer)
 	if err != nil || len(results) == 0 {
-		return missed[0]
+		return missed[0], nil
+	}
+
+	// 检索快照: 只保留前几条, 避免日志被无关结果淹没。
+	hits := make([]RetrievalHit, 0, len(results))
+	for i, r := range results {
+		if i >= retrievalTraceTopN {
+			break
+		}
+		hits = append(hits, RetrievalHit{
+			DocID:      r.ID,
+			QuestionID: r.Doc.Meta["question_id"],
+			PointKey:   r.Doc.Meta["point_key"],
+			Text:       r.Doc.Text,
+			Score:      r.Score,
+		})
 	}
 
 	missedByKey := make(map[string]ReferencePoint, len(missed))
@@ -101,9 +131,12 @@ func (p *RAGProbePlanner) pickMostRelevant(parent Question, answer string, misse
 	for _, r := range results {
 		if key := r.Doc.Meta["point_key"]; key != "" {
 			if m, ok := missedByKey[key]; ok {
-				return m
+				return m, hits
 			}
 		}
 	}
-	return missed[0]
+	return missed[0], hits
 }
+
+// retrievalTraceTopN 是写进日志的检索结果条数。
+const retrievalTraceTopN = 5

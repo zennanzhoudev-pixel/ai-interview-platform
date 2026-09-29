@@ -108,6 +108,28 @@ function timelineRow(entry) {
   if (Array.isArray(payload.missing) && payload.missing.length > 0) {
     row.append(el('p', { class: 'muted small', text: `未覆盖: ${payload.missing.join(' / ')}` }));
   }
+  // 追问的依据: 靶子 + 当时的检索命中(含分数)。
+  // 这是"它凭什么问这句"的答案, 因此直接把快照摊开显示, 而不是给一个结论。
+  if (payload.probe_focus || Array.isArray(payload.retrieval)) {
+    const box = el('div', { class: 'ai-retrieval' });
+    if (payload.probe_focus) {
+      box.append(el('p', {
+        class: 'muted small',
+        text: `追问靶子: ${payload.probe_focus}${payload.probe_reference ? ` —— ${payload.probe_reference}` : ''}`,
+      }));
+    }
+    const hits = Array.isArray(payload.retrieval) ? payload.retrieval : [];
+    if (hits.length > 0) {
+      box.append(el('p', { class: 'muted small', text: '当时的检索命中(按相关性):' }));
+      box.append(el('ol', { class: 'hit-list' }, hits.map((h) => el('li', {}, [
+        el('span', { class: 'mono small', text: h.question_id || '' }),
+        h.point_key ? el('span', { class: 'pill mint', text: h.point_key }) : null,
+        el('span', { class: 'muted small', text: (h.score || 0).toFixed(4) }),
+        el('span', { text: h.text || '' }),
+      ]))));
+    }
+    row.append(box);
+  }
   // 降级必须显眼: 悄悄降级会让整批面试的评分标准在无人察觉时改变。
   if (payload.degraded_reason || payload.degraded_from) {
     row.append(el('p', { class: 'muted small error', text: payload.degraded_reason || `降级自 ${payload.degraded_from}` }));

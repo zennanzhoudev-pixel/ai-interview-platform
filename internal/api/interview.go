@@ -450,6 +450,14 @@ func (s *Server) persistTurn(ctx context.Context, sess store.Session, t *orchest
 		st.Confidence = t.Verdict.Final.Confidence
 		st.DegradedFrom = t.Verdict.Final.DegradedFrom
 	}
+	// 追问依据与检索快照: 让 AI 日志能回答"它凭什么问这句"。
+	st.ProbeFocus = t.ProbeFocus
+	st.ProbeReference = t.ProbeReference
+	if len(t.Retrieval) > 0 {
+		if raw, err := json.Marshal(t.Retrieval); err == nil {
+			st.RetrievalJSON = raw
+		}
+	}
 
 	sctx, cancel := s.storeCtx(ctx)
 	defer cancel()
@@ -575,9 +583,19 @@ func toEngineTurn(t store.Turn) (orchestrator.Turn, error) {
 		Duration:   time.Duration(t.DurationMS) * time.Millisecond,
 		IsProbe:    t.IsProbe,
 		Scored:     t.Scored,
+		// 追问依据随轮次一起恢复: 断线重连后重新生成的报告与日志
+		// 必须与断开前一致, 否则"同一场面试两次看到不同的依据"。
+		ProbeFocus:     t.ProbeFocus,
+		ProbeReference: t.ProbeReference,
 	}
 	if !t.Scored {
 		return out, nil
+	}
+	if len(t.RetrievalJSON) > 0 {
+		var hits []orchestrator.RetrievalHit
+		if err := json.Unmarshal(t.RetrievalJSON, &hits); err == nil {
+			out.Retrieval = hits
+		}
 	}
 	if len(t.Verdict) == 0 {
 		// 标记载了评分却没有结论: 数据不完整。这里必须报错,

@@ -90,6 +90,14 @@ type Turn struct {
 	LevelNum     int     `json:"level_num"`
 	Confidence   float64 `json:"confidence"`
 	DegradedFrom string  `json:"degraded_from,omitempty"`
+	// 追问的决策依据与检索快照。
+	//
+	// 追问方向是 AI 自己挑的: 不落库的话, 事后只能看到"它问了这句",
+	// 看不到"它凭什么问这句"。这三列就是"可解释"与"只能相信"的差别。
+	ProbeFocus     string `json:"probe_focus,omitempty"`
+	ProbeReference string `json:"probe_reference,omitempty"`
+	// RetrievalJSON 是当时的检索命中(按相关性排序, 含分数与出处)。
+	RetrievalJSON []byte `json:"-"`
 	// Verdict 是完整评分结论的 JSON。等级/置信度另外拆成了标量列用于
 	// SQL 统计(分数分布监控), 但报告要能精确复现 —— 只存几个标量
 	// 会让断线重连后的报告丢掉分歧、仲裁等过程信息。

@@ -48,6 +48,14 @@ type Turn struct {
 	IsProbe    bool             `json:"is_probe"`
 	Scored     bool             `json:"scored"`
 	Verdict    *scoring.Verdict `json:"verdict,omitempty"`
+	// 追问的决策依据。只在 IsProbe 时非空。
+	//
+	// 为什么要把它们记在 Turn 上而不是只留在内存里: 追问方向是 AI 自己挑的,
+	// 如果不落库, 事后只能看到"它问了这句", 看不到"它凭什么问这句"。
+	// 复核 AI 判断时, 这个差别就是"可解释"与"只能相信"的差别。
+	ProbeFocus     string         `json:"probe_focus,omitempty"`
+	ProbeReference string         `json:"probe_reference,omitempty"`
+	Retrieval      []RetrievalHit `json:"retrieval,omitempty"`
 }
 
 // Decision 是引擎的输出: 下一步该做什么, 以及本轮刚完成的问答记录。
@@ -96,6 +104,12 @@ type Engine struct {
 	planner ProbePlanner
 	// resume 是候选人结构化简历, 用于在追问里引用简历原话(原文定位)。
 	resume *resume.Resume
+
+	// pendingTrace 保存"当前这道追问是怎么被挑出来的"。
+	// 它在生成追问时写入, 在该轮被作答、落库时取出 —— 这样检索快照只记一次,
+	// 而且与它对应的那一轮严格对齐。
+	pendingTrace []RetrievalHit
+	pendingProbe *Probe
 }
 
 // Option 用于配置引擎。
@@ -272,6 +286,15 @@ func (e *Engine) submit(answer string, took time.Duration, preset *scoring.Verdi
 		Duration:   took,
 		IsProbe:    e.probeDepth > 0,
 	}
+	// 把"这道追问当时是怎么选出来的"写进本轮记录。
+	if turn.IsProbe && e.pendingProbe != nil {
+		turn.ProbeFocus = e.pendingProbe.Focus
+		turn.ProbeReference = e.pendingProbe.Reference
+		turn.Retrieval = e.pendingTrace
+	}
+	// 用过即清: 下一轮如果不是追问, 就不该继承上一次的检索快照。
+	e.pendingTrace = nil
+	e.pendingProbe = nil
 
 	// 只有携带判定要点的考察项才评分。开场寒暄和候选人反问环节不计分,
 	// 否则寒暄内容会被打分并污染整体结论。
@@ -450,6 +473,9 @@ func (e *Engine) decideProbe(parent Question, answer string, res scoring.Result,
 		if !ok {
 			return Question{}, false
 		}
+		// 记下这次追问的依据与检索快照, 等这一轮被作答时写进 Turn。
+		e.pendingProbe = &p
+		e.pendingTrace = p.Hits
 		return e.ragProbeQuestion(parent, res, depth, p), true
 	}
 	if len(res.Missing) == 0 {

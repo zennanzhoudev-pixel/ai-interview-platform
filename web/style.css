@@ -616,6 +616,14 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
   background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px;
 }
 .ai-evidence { display: grid; gap: 8px; margin-top: 10px; }
+/* 检索快照: 追问依据的原始材料。用等宽数字与列表呈现, 让它看起来
+   就是"一份记录"而不是"一段解释"。 */
+.ai-retrieval {
+  margin-top: 10px; padding: 10px 12px; background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+.hit-list { margin: 6px 0 0 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; }
+.hit-list li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 /* 时间线上用颜色区分"需要人注意"的节点: 追问、改分、防作弊。 */
 .ai-entry.kind-probe { border-left-color: var(--warn); }
 .ai-entry.kind-override { border-left-color: var(--warn); }

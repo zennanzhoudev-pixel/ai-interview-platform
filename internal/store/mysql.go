@@ -308,12 +308,14 @@ func (m *MySQLStore) AppendTurn(ctx context.Context, t Turn) error {
 	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO qa_turn
 			(tenant_id, session_id, turn_index, stage, question_id, competency, question, answer,
-			 duration_ms, is_probe, scored, level, level_num, confidence, degraded_from, verdict, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 duration_ms, is_probe, scored, level, level_num, confidence, degraded_from, verdict,
+			 probe_focus, probe_reference, retrieval, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE session_id = session_id`,
 		t.TenantID, t.SessionID, t.Index, t.Stage, t.QuestionID, t.Competency, t.Question, t.Answer,
 		t.DurationMS, t.IsProbe, t.Scored, t.Level, t.LevelNum, t.Confidence,
-		t.DegradedFrom, verdict, createdAt.UTC())
+		t.DegradedFrom, verdict, t.ProbeFocus, t.ProbeReference,
+		nullableJSON(t.RetrievalJSON), createdAt.UTC())
 	return err
 }
 
@@ -323,7 +325,8 @@ func (m *MySQLStore) ListTurns(ctx context.Context, tenantID, sessionID string) 
 	}
 	rows, err := m.db.QueryContext(ctx, `
 		SELECT tenant_id, session_id, turn_index, stage, question_id, competency, question, answer,
-		       duration_ms, is_probe, scored, level, level_num, confidence, degraded_from, verdict, created_at
+		       duration_ms, is_probe, scored, level, level_num, confidence, degraded_from, verdict,
+		       probe_focus, probe_reference, retrieval, created_at
 		FROM qa_turn WHERE tenant_id=? AND session_id=? ORDER BY turn_index`, tenantID, sessionID)
 	if err != nil {
 		return nil, err
@@ -333,15 +336,18 @@ func (m *MySQLStore) ListTurns(ctx context.Context, tenantID, sessionID string) 
 	var out []Turn
 	for rows.Next() {
 		var (
-			t       Turn
-			verdict []byte
+			t         Turn
+			verdict   []byte
+			retrieval []byte
 		)
 		if err := rows.Scan(&t.TenantID, &t.SessionID, &t.Index, &t.Stage, &t.QuestionID, &t.Competency,
 			&t.Question, &t.Answer, &t.DurationMS, &t.IsProbe, &t.Scored,
-			&t.Level, &t.LevelNum, &t.Confidence, &t.DegradedFrom, &verdict, &t.CreatedAt); err != nil {
+			&t.Level, &t.LevelNum, &t.Confidence, &t.DegradedFrom, &verdict,
+			&t.ProbeFocus, &t.ProbeReference, &retrieval, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		t.Verdict = verdict
+		t.RetrievalJSON = retrieval
 		out = append(out, t)
 	}
 	return out, rows.Err()

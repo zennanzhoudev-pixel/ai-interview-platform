@@ -103,6 +103,33 @@ frontend_kind() {
   fi
 }
 
+# credentials_hint 把启动日志里"只在启动时出现一次"的凭据捞出来。
+#
+# 为什么需要它: 管理员邀请码与引导用 API Key 都只在启动时打印一次
+# (这是刻意的 —— 密钥不该躺在某个可以随时读到的文件里)。但它们的落点
+# 是日志文件, 而没人会想到去翻日志, 于是"我要用什么登录"变成了一个
+# 每次都要问一遍的问题。这里把它显示在 status 里, 并明确标注来源与风险。
+credentials_hint() {
+  [ -f "$LOG_FILE" ] || return 0
+  local invite key
+  # 注意结尾的 `|| true`: 脚本开着 `set -euo pipefail`, 而"日志里没有这一行"
+  # 是完全正常的情况(演示模式本来就不生成企业密钥)。没有它的话, grep 返回 1
+  # 会让整段脚本静默退出 —— 表现就是"这个提示功能写了但从来不显示"。
+  invite="$(grep -a -o '企业成员注册邀请码[^:]*: [A-Za-z0-9-]*' "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' || true)"
+  key="$(grep -a -o '引导用 API Key(仅显示这一次): [A-Za-z0-9._-]*' "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' || true)"
+  if [ -n "$invite" ]; then
+    printf '  管理员邀请码 : %s\n' "$invite"
+    printf '                 (演示模式自动生成, 只在本次进程有效; 生产请设置 ADMIN_INVITE_CODE)\n'
+  fi
+  if [ -n "$key" ]; then
+    printf '  引导 API Key : %s\n' "$key"
+    printf '                 (仅开启鉴权时生成, 且只显示这一次; 请尽快吊销并换成正式密钥)\n'
+  else
+    printf '  引导 API Key : 无 —— 当前是演示模式(未开启鉴权), 因此不生成企业密钥。\n'
+    printf '                 需要的话可以登录工作台后在「系统 → API 密钥」里创建。\n'
+  fi
+}
+
 stop_port() {
   local port="$1" pids
   pids="$(port_pids "$port")"
@@ -221,6 +248,7 @@ cmd_status() {
   printf '  健康检查    : %s\n' "$(curl -s --max-time 3 "http://127.0.0.1:$port/healthz" 2>/dev/null || echo 不通)"
   printf '  录制目录    : %s\n' "${RECORDING_DIR:-$ROOT/data/recordings}"
   printf '  日志        : %s\n\n' "$LOG_FILE"
+  credentials_hint
 }
 
 case "${1:-status}" in

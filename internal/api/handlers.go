@@ -450,9 +450,9 @@ func (s *Server) handleAILog(w http.ResponseWriter, r *http.Request) {
 		"timeline": entries,
 		"count":    len(entries),
 		"limits": map[string]any{
-			"retrieval_persisted": false,
-			"note": "追问方向来自 RAG 检索, 但逐轮的检索命中没有落库, 因此这里只显示" +
-				"是否追问与追问话术, 不显示当时的相似度分数。",
+			"retrieval_persisted": true,
+			"note": "追问的依据与当时的检索命中都记录在这里。这些快照是追问发生时写入的, " +
+				"因此是当时真实看到的结果, 不是事后重算的。",
 		},
 	})
 }
