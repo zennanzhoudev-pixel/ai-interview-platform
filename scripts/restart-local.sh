@@ -12,12 +12,12 @@
 # 用法:
 #   scripts/restart-local.sh                 # 换掉 8101 上的进程并启动新版
 #   scripts/restart-local.sh 8080            # 指定端口
-#   scripts/restart-local.sh 8101 --clean-legacy   # 顺手清掉 8111/8112/8113 的验证残留
+#   scripts/restart-local.sh 8101 --clean-all      # 先把所有残留的 interviewd 进程都停掉
 #
 set -euo pipefail
 
 PORT="${1:-8101}"
-CLEAN_LEGACY="${2:-}"
+CLEAN_ALL="${2:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -53,14 +53,63 @@ stop_listener() {
   fi
 }
 
-if [ "$CLEAN_LEGACY" = "--clean-legacy" ]; then
-  for p in 8111 8112 8113; do
-    stop_listener "$p"
+# clean_stray 停掉"所有正在监听端口的 interviewd 进程"。
+#
+# 不写死端口号: 端口是会变的(验证时随手起在 8111/8112/8113/8120 都可能),
+# 而写死清单的结果就是"清了三遍, 第四天又被另一个残留进程绕晕"。
+# 按进程名 + 监听态筛选, 目标永远是当前真实存在的那些。
+#
+# 只杀"正在监听"的监听态进程, 因此不会误伤正在跑的模拟面试进程
+# (interviewd 不带 -serve 时不监听任何端口)。
+clean_stray() {
+  local self=$$ keep_port="$1" pids pid alive
+  # 注意 lsof 的过滤器默认是"或"关系: 必须加 -a 才是"同时满足"。
+  # 少写一个 -a 的后果不是查不准, 而是会把 WeChat / ControlCenter 这些
+  # 完全无关的监听进程一起列进来 —— 而下面的循环会去杀它们。
+  pids="$(lsof -a -c interview -iTCP -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
+  [ -z "$pids" ] && { log "没有发现残留的 interviewd 进程"; return 0; }
+
+  local victims=""
+  for pid in $pids; do
+    [ "$pid" = "$self" ] && continue
+    # 二次确认: 可执行文件必须真的是 interviewd。
+    # 按进程名匹配本身就够用, 但"名字以 interview 开头的别的程序"是可能存在的,
+    # 而这条命令会杀进程, 所以宁可多查一次。
+    if ! lsof -a -p "$pid" -d txt 2>/dev/null | grep -q '/interviewd'; then
+      continue
+    fi
+    # 目标端口的进程交给 stop_listener 处理, 这里跳过避免重复报错。
+    if lsof -nP -a -p "$pid" -iTCP:"$keep_port" -sTCP:LISTEN >/dev/null 2>&1; then
+      continue
+    fi
+    victims="$victims $pid"
   done
-  log "验证残留已清理(8111/8112/8113)"
-fi
+  [ -z "${victims#" "}" ] && { log "没有其它端口的残留进程需要清理"; return 0; }
+
+  log "清理残留进程:$victims"
+  # shellcheck disable=SC2086
+  kill $victims 2>/dev/null || true
+  sleep 1
+  # shellcheck disable=SC2086
+  kill -9 $victims 2>/dev/null || true
+  sleep 1
+  alive=""
+  for pid in $victims; do
+    kill -0 "$pid" 2>/dev/null && alive="$alive $pid"
+  done
+  if [ -n "$alive" ]; then
+    warn "以下进程停不掉(不在当前用户权限内), 请手动执行: kill -9$alive"
+    warn "若提示 operation not permitted, 用: sudo kill -9$alive"
+  else
+    log "残留进程已清理"
+  fi
+}
 
 stop_listener "$PORT"
+
+if [ "$CLEAN_ALL" = "--clean-all" ]; then
+  clean_stray "$PORT"
+fi
 
 log "重新构建(前端在二进制里, 必须重建)"
 if ! command -v go >/dev/null 2>&1; then

@@ -1,4 +1,4 @@
-.PHONY: help run serve restart restart-clean selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
+.PHONY: help run serve restart restart-clean ps-check selftest test test-race test-mysql vet lint fmt tidy build docker-up docker-down clean loadtest frontend-check
 
 GO ?= go
 BIN := bin/interviewd
@@ -15,8 +15,8 @@ serve: ## 启动 Web 服务(浏览器打开 http://localhost:8080)
 restart: ## 把本机 8101 上的旧进程换成当前代码构建的新版(改完前端必须做这一步)
 	./scripts/restart-local.sh 8101
 
-restart-clean: ## 同上, 并清掉 8111/8112/8113 的验证残留进程
-	./scripts/restart-local.sh 8101 --clean-legacy
+restart-clean: ## 同上, 并先清掉所有别的端口上的残留 interviewd 进程
+	./scripts/restart-local.sh 8101 --clean-all
 
 selftest: ## 联调自检: 探测已配置的 LLM / ASR / TTS / Embedding 是否真的可用
 	$(GO) run ./cmd/interviewd -selftest
@@ -45,6 +45,11 @@ frontend-check: ## 前端模块语法检查(没有构建步骤, 因此需要显�
 
 loadtest: ## 并发压测: 同时开 10 场完整面试
 	node deployments/loadtest.mjs --base http://localhost:8080 --sessions 10
+
+ps-check: ## 看现在有哪些 interviewd 进程在监听端口(排查"打开还是旧系统"用)
+	@lsof -nP -a -c interview -iTCP -sTCP:LISTEN 2>/dev/null || echo "没有 interviewd 进程在监听"
+	@printf '\n判断服务端给的是新前端还是旧前端:\n'
+	@printf '  curl -s localhost:8101/ | grep -c "/js/app.js"   # 1 = 新版, 0 = 旧版\n'
 
 fmt: ## 格式化
 	$(GO) fmt ./...
