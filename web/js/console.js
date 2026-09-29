@@ -755,6 +755,11 @@ export async function renderReportDetail(root, sessionId) {
       renderReport(body, report, {
         actions: [
           el('button', { class: 'btn primary', text: '人工改分', onclick: () => overrideDialog(root, sessionId, report) }),
+          el('button', {
+            class: 'btn outline',
+            text: '查看 AI 日志',
+            onclick: () => navigate(`/console/sessions/${sessionId}/ai-log`),
+          }),
           el('button', { class: 'btn outline', text: '打印 / 导出 PDF', onclick: () => printReport(`面试报告-${sessionId}`) }),
           el('button', {
             class: 'btn outline',

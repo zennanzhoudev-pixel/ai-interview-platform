@@ -405,6 +405,58 @@ func (s *Server) handleCandidateResume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, parsed)
 }
 
+// handleAILog 返回一场面试的 AI 日志时间线。
+//
+// 它把三处数据合成一条线: 逐轮问答(含评分证据与降级)、报告生成、
+// 以及审计流(防作弊信号、报告查看、人工改分、录像播放)。
+// 阅后即焚式的人工复核在这里变成"可以顺着时间读一遍"。
+func (s *Server) handleAILog(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenant := platform.Tenant(ctx)
+	sessionID := r.PathValue("id")
+	sctx, cancel := s.storeCtx(ctx)
+	defer cancel()
+
+	sess, err := s.cfg.Store.GetSession(sctx, tenant, sessionID)
+	if err != nil {
+		s.storeErr(w, err, "get_session")
+		return
+	}
+	turns, err := s.cfg.Store.ListTurns(sctx, tenant, sessionID)
+	if err != nil {
+		s.storeErr(w, err, "list_turns")
+		return
+	}
+	var report *store.Report
+	if rep, err := s.cfg.Store.GetReport(sctx, tenant, sessionID); err == nil {
+		report = &rep
+	}
+	// 审计里与本场相关的记录: 面试创建/结束、防作弊、改分、录像播放都在其中。
+	audit, _ := s.cfg.Store.ListAudit(sctx, tenant, 500)
+	scoped := make([]store.AuditEntry, 0, 8)
+	for _, a := range audit {
+		if a.Target == sessionID {
+			scoped = append(scoped, a)
+		}
+	}
+
+	// 查看 AI 日志本身也要留痕: 它包含候选人原话与评分依据,
+	// "谁在什么时候看过"和查看报告是同一类事实。
+	s.audit(ctx, store.AuditReportView, sessionID, "查看 AI 日志时间线")
+
+	entries := s.buildAILog(sess, turns, report, scoped)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session":  sess,
+		"timeline": entries,
+		"count":    len(entries),
+		"limits": map[string]any{
+			"retrieval_persisted": false,
+			"note": "追问方向来自 RAG 检索, 但逐轮的检索命中没有落库, 因此这里只显示" +
+				"是否追问与追问话术, 不显示当时的相似度分数。",
+		},
+	})
+}
+
 // handleCandidateReport 让候选人读取自己的报告。
 //
 // 候选人不可能拿 API Key 去调管理侧的 /sessions/{id}/report, 但"看到

@@ -13,6 +13,8 @@ import {
   renderSystem, disconnectConsole,
 } from './console.js';
 import { renderObserverRoom } from './observer.js';
+import { renderPractice } from './practice.js';
+import { renderAILog } from './ailog.js';
 import {
   loadMe, currentUser, logout, renderAuthPage, renderProfile, renderCandidateHistory,
 } from './auth.js';
@@ -91,6 +93,7 @@ function renderShell(path) {
       ['/candidate', '概览'],
       ['/candidate/prep', '面试准备'],
       ['/candidate/room', '面试间'],
+      ['/practice', '真人双向对练'],
       ['/candidate/report', '我的报告'],
     ].forEach(([target, label]) => {
       navLinks.append(el('button', {
@@ -162,6 +165,8 @@ const routes = [
   { path: '/candidate/room', render: () => withCandidate(() => renderRoom(main)) },
   { path: '/candidate/report', render: () => withCandidate(() => renderCandidateReport(main)) },
   { path: '/candidate/history', render: () => withCandidate(() => renderCandidateHistory(main)) },
+  // 真人双向对练: 候选人空间与工作台都能进(面试官也想练提问)。
+  { path: '/practice', render: () => withCandidate(() => renderPractice(main)) },
 
   { path: '/console', render: () => (ensureConsoleKey() ? navigate('/console/dashboard') : renderKeyGate(main)) },
   { path: '/console/dashboard', render: () => withConsole(() => renderDashboard(main)) },
@@ -172,6 +177,8 @@ const routes = [
   { path: '/console/schedules', render: (params, query) => withConsole(() => renderSchedules(main, query)) },
   { path: '/console/reports', render: () => withConsole(() => renderReports(main)) },
   { path: '/console/reports/:id', render: (params) => withConsole(() => renderReportDetail(main, params.id)) },
+  // AI 日志: 逐轮问答 + 评分依据 + 降级 + 防作弊 + 审计的时间线。
+  { path: '/console/sessions/:id/ai-log', render: (params) => withConsole(() => renderAILog(main, params.id)) },
   { path: '/console/system', render: () => withConsole(() => renderSystem(main)) },
 
   { path: '/observer/:id', render: (params) => renderObserverRoom(main, params.id) },

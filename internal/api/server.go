@@ -22,6 +22,7 @@ import (
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/media"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/observability"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/practice"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/recording"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/sandbox"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/scoring"
@@ -79,6 +80,9 @@ type Config struct {
 	// 为 nil 时这些接口返回 503, 而基于 API Key 与面试会话令牌的
 	// 既有能力不受影响 —— 账号是"给人用的入口", 不是系统运行的前提。
 	Accounts *account.Service
+	// Practice 是真人双向对练的配对管理器。
+	// 为 nil 时对练接口返回 503, 其它能力不受影响。
+	Practice *practice.Manager
 
 	Logger     *slog.Logger
 	Metrics    *observability.Metrics
@@ -270,6 +274,9 @@ func (s *Server) routes() {
 		s.withPermission(auth.PermInterviewObserve, s.handleObserverTicket))
 	s.mux.Handle("GET /api/v1/sessions/{id}/recordings",
 		s.withPermission(auth.PermRecordingRead, s.handleListRecordings))
+	// AI 日志: 把逐轮问答、评分依据、降级、防作弊与审计串成时间线。
+	s.mux.Handle("GET /api/v1/sessions/{id}/ai-log",
+		s.withPermission(auth.PermReportRead, s.handleAILog))
 	s.mux.Handle("GET /api/v1/sessions/{id}/recordings/{kind}",
 		s.withPermission(auth.PermRecordingRead, s.handleDownloadRecording))
 	s.mux.Handle("DELETE /api/v1/sessions/{id}/recordings/{kind}",
@@ -306,6 +313,18 @@ func (s *Server) routes() {
 	// 候选人的历史面试记录: 只能看到与自己引用值匹配的那些会话。
 	s.mux.Handle("GET /api/v1/candidate/history",
 		s.withAccount(auth.PermSelfService, s.handleCandidateHistory))
+
+	// 真人双向对练: 配对 + 房间实时通道。
+	s.mux.Handle("POST /api/v1/practice/join",
+		s.withAccount(auth.PermSelfService, s.handlePracticeJoin))
+	s.mux.Handle("POST /api/v1/practice/leave",
+		s.withAccount(auth.PermSelfService, s.handlePracticeLeave))
+	s.mux.Handle("GET /api/v1/practice/room/{id}",
+		s.withAccount(auth.PermSelfService, s.handlePracticeRoom))
+	s.mux.Handle("GET /api/v1/practice/rooms",
+		s.withAccount(auth.PermSelfService, s.handlePracticeRooms))
+	// WebSocket 自己解析登录会话(浏览器握手会自动带同源 Cookie)。
+	s.mux.HandleFunc("GET /ws/practice/{id}", s.handlePracticeSocket)
 
 	// 静态资源挂在根路径。Go 1.22 的 ServeMux 优先匹配更具体的模式,
 	// 所以 /api 与 /ws 不会被这里吞掉。

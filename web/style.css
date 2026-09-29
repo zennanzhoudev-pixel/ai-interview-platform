@@ -601,6 +601,33 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
   font: inherit; text-decoration: underline;
 }
 
+/* ---------- AI 日志时间线 ----------
+   一条竖直的线 + 每条一个节点, 让"事情的先后"一眼可见。
+   左侧留出时间轴的位置, 右侧放内容。 */
+.ai-timeline { display: grid; gap: 4px; }
+.ai-entry {
+  position: relative; padding: 12px 0 12px 18px;
+  border-left: 2px solid var(--line); margin-left: 6px;
+}
+.ai-entry:last-child { border-left-color: transparent; }
+.ai-entry-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-entry-detail {
+  margin: 8px 0 0 0; white-space: pre-wrap; color: var(--ink-2);
+  background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.ai-evidence { display: grid; gap: 8px; margin-top: 10px; }
+/* 时间线上用颜色区分"需要人注意"的节点: 追问、改分、防作弊。 */
+.ai-entry.kind-probe { border-left-color: var(--warn); }
+.ai-entry.kind-override { border-left-color: var(--warn); }
+.ai-entry.kind-proctor { border-left-color: var(--warn); }
+.ai-entry.kind-score { border-left-color: var(--accent); }
+.ai-entry.kind-report { border-left-color: var(--accent); }
+
+/* 表单与接口错误提示统一走这一个类。
+   它以前只以 className 赋值的形式出现, 因此一直没有对应的样式 ——
+   结果是"出错了"和普通说明文字长得一模一样, 用户根本注意不到。 */
+.error { color: #8c2f2f; }
+
 @media (max-width: 900px) {
   .auth-shell { grid-template-columns: 1fr; gap: 24px; }
 }

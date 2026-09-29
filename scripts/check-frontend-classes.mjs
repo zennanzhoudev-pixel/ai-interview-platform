@@ -37,7 +37,12 @@ function collectUsedClasses() {
       // `a ${x.startsWith(`${y}/`) ? 'b' : ''}`), 于是残留一段没有闭合的
       // `${...`。所以最后再按 "${" 截断一次, 只保留它前面的部分。
       const raw = m[2].replace(/\$\{[^}]*\}/g, ' ').split('${')[0];
-      for (const token of raw.split(/\s+/).filter(Boolean)) {
+      let tokens = raw.split(/\s+/).filter(Boolean);
+      // 模板字符串被截断时, 最后一个记号是半截的: `class: \`ai-entry kind-${x}\``
+      // 会留下 "kind-"。它不是类名, 直接丢掉 —— 否则检查器会报一个
+      // 根本不存在的类, 变成噪声源。
+      if (m[2].includes('${') && tokens.length > 0) tokens = tokens.slice(0, -1);
+      for (const token of tokens) {
         // 只认"像类名"的记号: 全小写字母数字与连字符。
         // 否则会把 === / || / path.startsWith( 这类残留当成类名报出来,
         // 让检查器自己变成噪声源。

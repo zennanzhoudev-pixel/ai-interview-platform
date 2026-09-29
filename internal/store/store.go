@@ -157,6 +157,12 @@ const (
 	AuditRecordingDelete   = "recording.delete"
 	AuditCodeRun           = "code.run"
 	AuditObserverJoin      = "observer.join"
+	// 真人双向对练: 配对成功与结束。
+	//
+	// 对练本身不产生评分与报告, 因此"谁在什么时候和谁练过"只能靠审计留痕;
+	// 这也是它唯一的记录方式(对练房的状态是内存里的临时状态)。
+	AuditPracticeJoin = "practice.join"
+	AuditPracticeEnd  = "practice.end"
 	// AuditVideoSignal 记录视频信令的建立与断开。
 	//
 	// 信令本身不含内容, 但"有人进入过这场面试的视频间"是必须留痕的事实:

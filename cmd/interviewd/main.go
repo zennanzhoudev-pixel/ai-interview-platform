@@ -35,6 +35,7 @@ import (
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/observability"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/orchestrator"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/platform"
+	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/practice"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/recording"
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/sandbox"
@@ -520,6 +521,7 @@ func runServer(opts serverOptions) error {
 		Pingers:            buildPingers(tts, asr, embedder, llm.FromEnv()),
 		StoreKind:          storeKind(sessionStore),
 		Accounts:           accounts,
+		Practice:           practice.NewManager(practice.Config{}),
 		Logger:             logger,
 		Metrics:            metrics,
 		TenantID:           opts.tenantID,
