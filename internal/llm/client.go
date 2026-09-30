@@ -37,7 +37,18 @@ type Config struct {
 	// 这时显式关掉即可。注意这里用的是"反向开关"而不是 JSONMode bool:
 	// 零值 Config 应该得到最安全的默认行为, 而不是悄悄失去约束。
 	DisableJSONMode bool
+	// APIMode 选择对话协议:
+	//   - "chat"(默认): POST /chat/completions, OpenAI 经典协议;
+	//   - "responses": POST /responses, 火山方舟/OpenAI 新版 Responses 协议。
+	// 两家协议的请求体与响应结构不通用, 因此必须显式选择, 不能靠"自动探测"。
+	APIMode string
 }
+
+// 对话协议常量。
+const (
+	APIChat      = "chat"
+	APIResponses = "responses"
+)
 
 // DefaultConfig 返回一份可直接使用的默认配置。
 func DefaultConfig() Config {
@@ -67,6 +78,9 @@ func FromEnv() Config {
 	}
 	if v := os.Getenv("LLM_MODEL"); v != "" {
 		cfg.Model = v
+	}
+	if v := os.Getenv("LLM_API_MODE"); v != "" {
+		cfg.APIMode = v
 	}
 	if os.Getenv("LLM_DISABLE_JSON_MODE") != "" {
 		cfg.DisableJSONMode = true
@@ -145,6 +159,9 @@ func NewClient(cfg Config) *Client {
 	if cfg.MaxRetries < 0 {
 		cfg.MaxRetries = 0
 	}
+	if cfg.APIMode == "" {
+		cfg.APIMode = APIChat
+	}
 	return &Client{
 		cfg:  cfg,
 		http: &http.Client{},
@@ -169,16 +186,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (
 		opt(&o)
 	}
 
-	payload := map[string]any{
-		"model":       c.cfg.Model,
-		"messages":    messages,
-		"temperature": o.temperature,
-		"max_tokens":  o.maxTokens,
-	}
-	if o.jsonMode {
-		payload["response_format"] = map[string]string{"type": "json_object"}
-	}
-	body, err := json.Marshal(payload)
+	body, endpoint, parse, err := c.requestFor(messages, o)
 	if err != nil {
 		return Response{}, err
 	}
@@ -190,7 +198,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (
 			return Response{}, err
 		}
 
-		resp, err := c.do(ctx, body)
+		resp, err := c.do(ctx, endpoint, body, parse)
 		resp.Attempts = attempt
 		if err == nil {
 			return resp, nil
@@ -215,12 +223,39 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (
 	return Response{}, lastErr
 }
 
-func (c *Client) do(ctx context.Context, body []byte) (Response, error) {
+// requestFor 按协议模式组装请求体、端点与响应解析函数。
+func (c *Client) requestFor(messages []Message, o options) ([]byte, string, responseParser, error) {
+	if c.cfg.APIMode == APIResponses {
+		body, err := json.Marshal(map[string]any{
+			"model":             c.cfg.Model,
+			"input":             responsesInput(messages),
+			"temperature":       o.temperature,
+			"max_output_tokens": o.maxTokens,
+		})
+		return body, "/responses", parseResponses, err
+	}
+
+	payload := map[string]any{
+		"model":       c.cfg.Model,
+		"messages":    messages,
+		"temperature": o.temperature,
+		"max_tokens":  o.maxTokens,
+	}
+	if o.jsonMode {
+		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	body, err := json.Marshal(payload)
+	return body, "/chat/completions", parseCompletions, err
+}
+
+type responseParser func([]byte) (Response, error)
+
+func (c *Client) do(ctx context.Context, endpoint string, body []byte, parse responseParser) (Response, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
-	endpoint := strings.TrimRight(c.cfg.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	url := strings.TrimRight(c.cfg.BaseURL, "/") + endpoint
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return Response{}, err
 	}
@@ -244,6 +279,16 @@ func (c *Client) do(ctx context.Context, body []byte) (Response, error) {
 		}
 	}
 
+	parsed, err := parse(raw)
+	if err != nil {
+		return Response{Latency: latency}, err
+	}
+	parsed.Latency = latency
+	return parsed, nil
+}
+
+// parseCompletions 解析 /chat/completions 的响应。
+func parseCompletions(raw []byte) (Response, error) {
 	var out struct {
 		Choices []struct {
 			Message struct {
@@ -257,10 +302,10 @@ func (c *Client) do(ctx context.Context, body []byte) (Response, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return Response{Latency: latency}, fmt.Errorf("llm: 解析响应失败: %w", err)
+		return Response{}, fmt.Errorf("llm: 解析响应失败: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return Response{Latency: latency}, errors.New("llm: 响应中没有 choices")
+		return Response{}, errors.New("llm: 响应中没有 choices")
 	}
 
 	return Response{
@@ -268,7 +313,6 @@ func (c *Client) do(ctx context.Context, body []byte) (Response, error) {
 		PromptTokens:     out.Usage.PromptTokens,
 		CompletionTokens: out.Usage.CompletionTokens,
 		TotalTokens:      out.Usage.TotalTokens,
-		Latency:          latency,
 	}, nil
 }
 

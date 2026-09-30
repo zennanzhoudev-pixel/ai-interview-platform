@@ -387,6 +387,7 @@ MySQL 实现共用同一套用例, 用来保证"本地用内存跑通, 线上换
 | `APP_SECRET` | 候选人令牌签名 + 候选人假名化密钥 | 进程内临时密钥(重启后已发出的链接失效) |
 | `TENANT_ID` | 默认租户 | `default` |
 | `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | 大模型评分 | 规则评分器(报告里标注来源) |
+| `LLM_API_MODE` | 对话协议: `chat`(/chat/completions) 或 `responses`(火山方舟新版) | `chat` |
 | `LLM_MODEL_B` | 复核模型(双模型交叉) | 复核用规则评分器 |
 | `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 语义向量检索 | 本地特征哈希(词面相似度) |
 | `ASR_API_KEY` / `ASR_BASE_URL` / `ASR_MODEL` | 语音识别 | 语音模式关闭(WebSocket 明确报错, 不静默降级) |
