@@ -12,6 +12,13 @@ import (
 	"github.com/zennanzhoudev-pixel/ai-interview-platform/internal/rag"
 )
 
+// probeMaxTokens 是探测请求的输出预算。
+//
+// 不能用 1: 火山方舟这类会先输出 reasoning(思维链)的模型, 当
+// max_output_tokens 过小时只会吐出 reasoning token, 不产生
+// output_text, 会把"凭证明明有效"误判成"没有助手文本"。
+const probeMaxTokens = 128
+
 // 上游能力的真实探测。
 //
 // 这些 probe 存在的意义只有一个: 把"配了密钥"和"真的能用"分开。
@@ -26,7 +33,7 @@ type llmPing struct {
 // Ping 用最小代价确认模型与凭证都有效。
 func (p llmPing) Ping(ctx context.Context) error {
 	_, err := llm.NewClient(p.cfg).Chat(ctx,
-		[]llm.Message{{Role: "user", Content: "ping"}}, llm.WithMaxTokens(1))
+		[]llm.Message{{Role: "user", Content: "ping"}}, llm.WithMaxTokens(probeMaxTokens))
 	if err != nil {
 		return fmt.Errorf("模型 %s 探测失败: %w", p.cfg.Model, err)
 	}
