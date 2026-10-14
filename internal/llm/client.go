@@ -42,6 +42,14 @@ type Config struct {
 	//   - "responses": POST /responses, 火山方舟/OpenAI 新版 Responses 协议。
 	// 两家协议的请求体与响应结构不通用, 因此必须显式选择, 不能靠"自动探测"。
 	APIMode string
+	// CircuitThreshold / CircuitCooldown 控制熔断: 连续多少次可重试失败后
+	// 打开, 以及打开后冷却多久再放行一个探针。0 值在 NewClient 里取默认。
+	CircuitThreshold int
+	CircuitCooldown  time.Duration
+	// BudgetTokens / BudgetWindow 控制本进程的 token 费用预算:
+	// 每个窗口内最多消耗 BudgetTokens 个 token; 0 表示不限额。
+	BudgetTokens int
+	BudgetWindow time.Duration
 }
 
 // 对话协议常量。
@@ -53,12 +61,16 @@ const (
 // DefaultConfig 返回一份可直接使用的默认配置。
 func DefaultConfig() Config {
 	return Config{
-		BaseURL:     "https://api.openai.com/v1",
-		Model:       "gpt-4o-mini",
-		Temperature: 0,
-		MaxTokens:   800,
-		Timeout:     20 * time.Second,
-		MaxRetries:  2,
+		BaseURL:          "https://api.openai.com/v1",
+		Model:            "gpt-4o-mini",
+		Temperature:      0,
+		MaxTokens:        800,
+		Timeout:          20 * time.Second,
+		MaxRetries:       2,
+		CircuitThreshold: 5,
+		CircuitCooldown:  30 * time.Second,
+		BudgetTokens:     0,
+		BudgetWindow:     time.Minute,
 	}
 }
 
@@ -84,6 +96,18 @@ func FromEnv() Config {
 	}
 	if os.Getenv("LLM_DISABLE_JSON_MODE") != "" {
 		cfg.DisableJSONMode = true
+	}
+	if v := envInt("LLM_CIRCUIT_THRESHOLD"); v > 0 {
+		cfg.CircuitThreshold = v
+	}
+	if v := envDuration("LLM_CIRCUIT_COOLDOWN"); v > 0 {
+		cfg.CircuitCooldown = v
+	}
+	if v := envInt("LLM_BUDGET_TOKENS"); v > 0 {
+		cfg.BudgetTokens = v
+	}
+	if v := envDuration("LLM_BUDGET_WINDOW"); v > 0 {
+		cfg.BudgetWindow = v
 	}
 	return cfg
 }
@@ -139,6 +163,9 @@ func IsRetryable(err error) bool {
 type Client struct {
 	cfg  Config
 	http *http.Client
+	// circuit 与 budget 在 NewClient 里必然被初始化, 因此 Chat 里不判空。
+	circuit *circuitBreaker
+	budget  *tokenBudget
 }
 
 // NewClient 构造客户端。
@@ -162,9 +189,21 @@ func NewClient(cfg Config) *Client {
 	if cfg.APIMode == "" {
 		cfg.APIMode = APIChat
 	}
+	if cfg.CircuitThreshold <= 0 {
+		cfg.CircuitThreshold = def.CircuitThreshold
+	}
+	if cfg.CircuitCooldown <= 0 {
+		cfg.CircuitCooldown = def.CircuitCooldown
+	}
+	if cfg.BudgetWindow <= 0 {
+		cfg.BudgetWindow = def.BudgetWindow
+	}
+	// BudgetTokens 保持 0 = 不限, 不设默认。
 	return &Client{
-		cfg:  cfg,
-		http: &http.Client{},
+		cfg:     cfg,
+		http:    &http.Client{},
+		circuit: newCircuitBreaker(cfg.CircuitThreshold, cfg.CircuitCooldown),
+		budget:  newTokenBudget(cfg.BudgetTokens, cfg.BudgetWindow),
 	}
 }
 
@@ -175,6 +214,14 @@ func (c *Client) Model() string { return c.cfg.Model }
 func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (Response, error) {
 	if !c.cfg.Enabled() {
 		return Response{}, errors.New("llm: 未配置 API Key 或模型")
+	}
+	// 熔断与配额在最外层拦截: 在已知不可用 / 已超预算时, 连一次请求都不发,
+	// 用最快的失败把"该降级"的信号交给上层, 而不是继续空耗上游与自己的连接池。
+	if !c.circuit.allow() {
+		return Response{}, ErrCircuitOpen
+	}
+	if c.budget.exceeded() {
+		return Response{}, ErrBudgetExceeded
 	}
 
 	o := options{
@@ -201,6 +248,8 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (
 		resp, err := c.do(ctx, endpoint, body, parse)
 		resp.Attempts = attempt
 		if err == nil {
+			c.budget.consume(resp.TotalTokens)
+			c.circuit.recordSuccess()
 			return resp, nil
 		}
 		lastErr = err
@@ -219,6 +268,11 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...Option) (
 		case <-ctx.Done():
 			return Response{}, ctx.Err()
 		}
+	}
+	// 只有"可重试"的失败(上游故障/限流/网络)才计入熔断;
+	// 4xx 说明请求本身有问题, 不该把上游打成断路。
+	if IsRetryable(lastErr) {
+		c.circuit.recordFailure()
 	}
 	return Response{}, lastErr
 }
