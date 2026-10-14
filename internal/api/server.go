@@ -49,10 +49,11 @@ type Config struct {
 	// 换成随机值会导致重启后所有令牌失效、假名引用全变。
 	Secret []byte
 
-	Scorers      func() Scorers
-	ProbePlanner orchestrator.ProbePlanner
-	ASR          media.ASRProvider
-	TTS          media.TTSProvider
+	Scorers         func() Scorers
+	ProbePlanner    orchestrator.ProbePlanner
+	FollowUpPhraser orchestrator.FollowUpPhraser
+	ASR             media.ASRProvider
+	TTS             media.TTSProvider
 
 	// KnowledgeFor 按租户构建知识库(题库 + 内置题)。
 	//

@@ -396,6 +396,9 @@ func (s *Server) buildEngine(ctx context.Context, sess store.Session) (*orchestr
 	} else if s.cfg.ProbePlanner != nil {
 		opts = append(opts, orchestrator.WithProbePlanner(s.cfg.ProbePlanner))
 	}
+	if s.cfg.FollowUpPhraser != nil {
+		opts = append(opts, orchestrator.WithFollowUpPhraser(s.cfg.FollowUpPhraser))
+	}
 	eng := orchestrator.NewEngine(plan, bank, total, opts...)
 	if len(sess.ResumeJSON) > 0 {
 		var parsed resume.Resume

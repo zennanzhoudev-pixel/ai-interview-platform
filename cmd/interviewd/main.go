@@ -491,6 +491,7 @@ func runServer(opts serverOptions) error {
 	if err != nil {
 		return err
 	}
+	followUpPhraser := buildFollowUpPhraser(cliLogger)
 	// 知识库: 提问、追问、检索可视化三者共用同一份索引。
 	// 题库改动能立刻生效(rebuild 在请求内同步完成)。
 	corpus, embedder, err := buildKnowledge(context.Background(), sessionStore, opts.tenantID, cliLogger)
@@ -525,14 +526,15 @@ func runServer(opts serverOptions) error {
 	}
 
 	srv := api.NewServer(api.Config{
-		Store:        sessionStore,
-		Checkpoint:   ckpt,
-		Keys:         keys,
-		Secret:       secret,
-		Scorers:      scorerFactory,
-		ProbePlanner: corpus.Planner(),
-		ASR:          asr,
-		TTS:          tts,
+		Store:           sessionStore,
+		Checkpoint:      ckpt,
+		Keys:            keys,
+		Secret:          secret,
+		Scorers:         scorerFactory,
+		ProbePlanner:    corpus.Planner(),
+		FollowUpPhraser: followUpPhraser,
+		ASR:             asr,
+		TTS:             tts,
 		KnowledgeFor: func(ctx context.Context, tenant string) (*knowledge.Corpus, error) {
 			next, _, err := buildKnowledge(ctx, sessionStore, tenant, cliLogger)
 			return next, err
@@ -814,6 +816,19 @@ func buildScorerFactory(logger *log.Logger) (func() api.Scorers, error) {
 			Tolerance: 1,
 		}
 	}, nil
+}
+
+// buildFollowUpPhraser 构造追问措辞器。
+//
+// 配了 LLM 就用它生成更自然的追问(锚定参考答案), 否则返回 nil,
+// 引擎回落到确定性模板 —— 追问措辞失败永远不该让面试卡住。
+func buildFollowUpPhraser(logger *log.Logger) orchestrator.FollowUpPhraser {
+	cfg := llm.FromEnv()
+	if !cfg.Enabled() {
+		return nil
+	}
+	logger.Printf("追问措辞使用大模型 %s(锚定参考答案, 跑偏自动回落模板)", cfg.Model)
+	return orchestrator.NewLLMFollowUpPhraser(llm.NewClient(cfg))
 }
 
 // buildProbePlanner 构造检索驱动的追问规划器。

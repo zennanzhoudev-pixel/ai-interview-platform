@@ -425,6 +425,7 @@ func TestProbeCitesResumeQuoteWhenPresent(t *testing.T) {
 	q := eng.ragProbeQuestion(
 		Question{ID: "q_resume_zset", Stage: StageResumeDeepDive,
 			Competency: "project_depth", MaxProbe: 2, Importance: ImportanceHigh},
+		"我把排行榜拆成了 ZSet 索引",
 		scoring.Result{Missing: []string{"内存"}},
 		1,
 		Probe{Focus: "内存", Reference: "内存增长、过期清理与大 key 分片"},
