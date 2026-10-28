@@ -1,0 +1,82 @@
+# 生产部署: interviewd + MySQL + Redis + Caddy(自动 HTTPS)。
+# 与根目录 docker-compose.yml(本地开发) 不同: 这里不含 ES/Kafka/Jaeger/Prometheus/Grafana,
+# 只保留线上必须的三样数据依赖, 并且 MySQL/Redis 不映射到宿主机端口。
+#
+# 用法(在 deploy 目录下):
+#   cp .env.example .env   # 填好域名/密钥
+#   docker compose up -d --build
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      - interviewd
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  interviewd:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      MYSQL_DSN: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE}?parseTime=true&loc=UTC"
+      REDIS_ADDR: "redis:6379"
+      APP_SECRET: ${APP_SECRET}
+      ADMIN_INVITE_CODE: ${ADMIN_INVITE_CODE}
+      TENANT_ID: "default"
+      RECORDING_DIR: "/data/recordings"
+      RECORDING_RETENTION_DAYS: "90"
+      # 大模型(可选)。不填则回落到规则评分, 报告会标注评分来源。
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_API_MODE: ${LLM_API_MODE:-chat}
+      LOG_FORMAT: "json"
+    volumes:
+      - recording-data:/data
+    # 不映射宿主机端口: 只通过 Caddy 暴露 80/443。
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 建表脚本与代码共用同一份(go:embed 也读它), 避免两份 DDL 不一致。
+      - ../internal/store/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+volumes:
+  mysql-data:
+  redis-data:
+  recording-data:
+  caddy-data:
+  caddy-config:

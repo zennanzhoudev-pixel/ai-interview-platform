@@ -1,0 +1,7 @@
+# Caddy 反向代理 + 自动 HTTPS。
+# {$DOMAIN} 从 deploy/.env 读取; 访问域名自动申请/续期 Let's Encrypt 证书。
+{$DOMAIN} {
+	encode gzip
+	# WebSocket(/ws/...) Caddy 会自动升级, 无需额外配置。
+	reverse_proxy interviewd:8080
+}
