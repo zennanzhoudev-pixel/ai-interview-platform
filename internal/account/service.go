@@ -17,10 +17,12 @@ import (
 // 这样"密码策略""谁能注册成管理员""人脸登录的前置条件"这些规则
 // 只有一处定义, 不会出现"网页端校验了、接口没校验"的漏洞。
 type Service struct {
-	store   Store
-	hasher  *PasswordHasher
-	matcher Matcher
-	logger  *slog.Logger
+	store    Store
+	hasher   *PasswordHasher
+	matcher  Matcher
+	logger   *slog.Logger
+	notifier Notifier
+	codes    *codeStore
 
 	tenantID        string
 	adminInviteCode string
@@ -54,6 +56,8 @@ type Config struct {
 	SessionTTL time.Duration
 	Logger     *slog.Logger
 	Now        func() time.Time
+	// Notifier 负责发送验证码; 默认为 LogNotifier(开发模式)。
+	Notifier Notifier
 }
 
 // New 构造账号服务。
@@ -73,6 +77,9 @@ func New(cfg Config) *Service {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.Notifier == nil {
+		cfg.Notifier = LogNotifier{Logger: cfg.Logger}
+	}
 	if cfg.FaceThreshold <= 0 || cfg.FaceThreshold > 1 {
 		// 阈值必须跟着匹配器走, 不能用一个全局常量。
 		//
@@ -87,6 +94,8 @@ func New(cfg Config) *Service {
 		hasher:          cfg.Hasher,
 		matcher:         cfg.Matcher,
 		logger:          cfg.Logger,
+		notifier:        cfg.Notifier,
+		codes:           newCodeStore(),
 		tenantID:        cfg.TenantID,
 		adminInviteCode: cfg.AdminInviteCode,
 		secret:          cfg.Secret,

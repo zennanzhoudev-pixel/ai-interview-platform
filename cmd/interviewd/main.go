@@ -678,6 +678,7 @@ func openAccountService(
 		Matcher:         matcher,
 		FaceThreshold:   opts.faceThreshold,
 		Logger:          logger,
+		Notifier:        buildNotifier(logger),
 	})
 	info := svc.MatcherInfo()
 	logger.Info("人脸匹配器已就绪",
@@ -689,6 +690,19 @@ func openAccountService(
 			"且换个姿势就可能失败。要接近 Face ID 的体验, 请用 -face-matcher=http 接入真实人脸模型服务")
 	}
 	return svc
+}
+
+// buildNotifier 选择验证码通知通道: 配了 SMTP 就发邮件, 否则写日志(开发模式)。
+func buildNotifier(logger *slog.Logger) account.Notifier {
+	if host := strings.TrimSpace(os.Getenv("SMTP_HOST")); host != "" {
+		logger.Info("验证码通道: SMTP", slog.String("host", host))
+		return account.SMTPNotifier{
+			Host: host, Port: os.Getenv("SMTP_PORT"), User: os.Getenv("SMTP_USER"),
+			Pass: os.Getenv("SMTP_PASS"), From: os.Getenv("SMTP_FROM"),
+		}
+	}
+	logger.Info("验证码通道: 开发日志(未配置 SMTP_HOST, 验证码会打印在日志里)")
+	return account.LogNotifier{Logger: logger}
 }
 
 // buildPairer 选择"真人双向对练"的配对实现。

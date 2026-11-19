@@ -98,6 +98,12 @@ func accountError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, account.ErrSessionExpired):
 		writeError(w, http.StatusUnauthorized, "登录已过期, 请重新登录")
+	case errors.Is(err, account.ErrCodeInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, account.ErrTooManyCodeAttempts):
+		writeError(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, account.ErrNotifierUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "通知通道未配置, 请联系管理员")
 	default:
 		writeError(w, http.StatusInternalServerError, "账号操作失败")
 	}
@@ -153,6 +159,96 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	payload := s.sessionPayload(user, session.ExpiresAt)
 	payload["auto_login"] = true
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleVerifyRequest 发送邮箱/手机验证码。
+func (s *Server) handleVerifyRequest(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Accounts == nil {
+		writeError(w, http.StatusServiceUnavailable, "账号功能未启用")
+		return
+	}
+	var req struct {
+		Kind   string `json:"kind"`
+		Target string `json:"target"`
+	}
+	if !decodeBody(w, r, 64<<10, &req) {
+		return
+	}
+	ctx, cancel := s.storeCtx(r.Context())
+	defer cancel()
+	if err := s.cfg.Accounts.RequestVerifyCode(ctx, req.Kind, req.Target); err != nil {
+		accountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleVerifyConfirm 校验邮箱/手机验证码。
+func (s *Server) handleVerifyConfirm(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Accounts == nil {
+		writeError(w, http.StatusServiceUnavailable, "账号功能未启用")
+		return
+	}
+	var req struct {
+		Kind   string `json:"kind"`
+		Target string `json:"target"`
+		Code   string `json:"code"`
+	}
+	if !decodeBody(w, r, 64<<10, &req) {
+		return
+	}
+	ctx, cancel := s.storeCtx(r.Context())
+	defer cancel()
+	if err := s.cfg.Accounts.ConfirmVerifyCode(ctx, req.Kind, req.Target, req.Code); err != nil {
+		accountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verified": true})
+}
+
+// handlePasswordForgot 发送找回密码验证码。
+func (s *Server) handlePasswordForgot(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Accounts == nil {
+		writeError(w, http.StatusServiceUnavailable, "账号功能未启用")
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decodeBody(w, r, 64<<10, &req) {
+		return
+	}
+	ctx, cancel := s.storeCtx(r.Context())
+	defer cancel()
+	if err := s.cfg.Accounts.RequestPasswordReset(ctx, req.Email); err != nil {
+		accountError(w, err)
+		return
+	}
+	// 无论账号是否存在都返回成功, 避免账号枚举。
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handlePasswordReset 用验证码重置密码。
+func (s *Server) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Accounts == nil {
+		writeError(w, http.StatusServiceUnavailable, "账号功能未启用")
+		return
+	}
+	var req struct {
+		Email       string `json:"email"`
+		Code        string `json:"code"`
+		NewPassword string `json:"new_password"`
+	}
+	if !decodeBody(w, r, 64<<10, &req) {
+		return
+	}
+	ctx, cancel := s.storeCtx(r.Context())
+	defer cancel()
+	if err := s.cfg.Accounts.ResetPassword(ctx, req.Email, req.Code, req.NewPassword); err != nil {
+		accountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleLogin 密码登录。

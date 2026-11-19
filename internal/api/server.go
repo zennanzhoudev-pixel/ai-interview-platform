@@ -304,6 +304,10 @@ func (s *Server) routes() {
 	// 用 API Key 才能调用的话, 人就没法登录了。
 	s.mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
 	s.mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/v1/auth/verify/request", s.handleVerifyRequest)
+	s.mux.HandleFunc("POST /api/v1/auth/verify/confirm", s.handleVerifyConfirm)
+	s.mux.HandleFunc("POST /api/v1/auth/password/forgot", s.handlePasswordForgot)
+	s.mux.HandleFunc("POST /api/v1/auth/password/reset", s.handlePasswordReset)
 	s.mux.HandleFunc("POST /api/v1/auth/face/login", s.handleFaceLogin)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/v1/auth/me", s.handleMe)
