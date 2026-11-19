@@ -920,21 +920,37 @@ func buildMediaProviders(logger *log.Logger) (media.ASRProvider, media.TTSProvid
 	var tts media.TTSProvider
 
 	if key := os.Getenv("ASR_API_KEY"); key != "" {
-		asr = &media.OpenAIASR{
-			BaseURL: os.Getenv("ASR_BASE_URL"), APIKey: key, Model: os.Getenv("ASR_MODEL"),
-		}
-		logger.Print("语音识别已启用(OpenAI 兼容 /audio/transcriptions)")
+		asr = buildASRProvider(key)
+		logger.Printf("语音识别已启用(%s)", asr.Name())
 	}
 	if key := os.Getenv("TTS_API_KEY"); key != "" {
-		tts = &media.OpenAITTS{
-			BaseURL: os.Getenv("TTS_BASE_URL"), APIKey: key, Model: os.Getenv("TTS_MODEL"),
-		}
-		logger.Print("语音合成已启用(OpenAI 兼容 /audio/speech)")
+		tts = buildTTSProvider(key)
+		logger.Printf("语音合成已启用(%s)", tts.Name())
 	}
 	if asr == nil || tts == nil {
 		logger.Print("语音模式未启用(需同时配置 ASR_API_KEY 与 TTS_API_KEY); 前端回落到浏览器识别/合成")
 	}
 	return asr, tts
+}
+
+// buildASRProvider / buildTTSProvider 按 ASR_PROVIDER / TTS_PROVIDER 选厂商实现:
+// 默认走 OpenAI 兼容协议, 置为 "doubao" 时走火山语音技术原生协议。
+func buildASRProvider(key string) media.ASRProvider {
+	if os.Getenv("ASR_PROVIDER") == "doubao" {
+		return &media.DoubaoASR{
+			APIKey: key, ResourceID: os.Getenv("ASR_RESOURCE_ID"), BaseURL: os.Getenv("ASR_BASE_URL"),
+		}
+	}
+	return &media.OpenAIASR{BaseURL: os.Getenv("ASR_BASE_URL"), APIKey: key, Model: os.Getenv("ASR_MODEL")}
+}
+
+func buildTTSProvider(key string) media.TTSProvider {
+	if os.Getenv("TTS_PROVIDER") == "doubao" {
+		return &media.DoubaoTTS{
+			APIKey: key, ResourceID: os.Getenv("TTS_RESOURCE_ID"), Voice: os.Getenv("TTS_VOICE"), BaseURL: os.Getenv("TTS_BASE_URL"),
+		}
+	}
+	return &media.OpenAITTS{BaseURL: os.Getenv("TTS_BASE_URL"), APIKey: key, Model: os.Getenv("TTS_MODEL")}
 }
 
 // runSelfTest 探测已配置的外部能力, 输出一份联调报告。
@@ -974,7 +990,7 @@ func runSelfTest(logger *log.Logger) {
 	}
 
 	if key := os.Getenv("TTS_API_KEY"); key != "" {
-		tts := &media.OpenAITTS{BaseURL: os.Getenv("TTS_BASE_URL"), APIKey: key, Model: os.Getenv("TTS_MODEL")}
+		tts := buildTTSProvider(key)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		start := time.Now()
 		stream, err := tts.Speak(ctx, "你好", media.Voice{})
