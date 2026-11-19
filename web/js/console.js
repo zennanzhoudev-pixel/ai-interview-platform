@@ -129,7 +129,14 @@ function pageHead(title, lede, actions = []) {
 
 function loading(root) {
   clear(root);
-  root.append(el('p', { class: 'muted', text: '正在加载…' }));
+  const wrap = el('div', { class: 'skeleton-wrap' });
+  wrap.append(
+    el('div', { class: 'skeleton skeleton-line skeleton-line--short' }),
+    el('div', { class: 'skeleton skeleton-line' }),
+    el('div', { class: 'skeleton skeleton-card' }),
+    el('div', { class: 'skeleton skeleton-card' }),
+  );
+  root.append(wrap);
 }
 
 /* ---------------- 看板 ---------------- */

@@ -707,6 +707,37 @@ main { padding: 28px 32px 96px; max-width: 1280px; margin: 0 auto; }
    三处小调整, 效果比"换配色"明显得多: 卡片有轻微悬停反馈、
     主按钮有极浅的投影、导航当前项有下划线而不是只靠字重。 */
 .card, .block { transition: box-shadow .18s ease, transform .18s ease; }
+
+/* ---------- 骨架屏 ----------
+   加载态不再是一行"正在加载…"文字: 用与内容同宽同高的占位块先把版式撑住,
+   数据回来时页面不会整块跳动。这对"看起来是否像真实产品"影响很大。 */
+.skeleton-wrap { display: grid; gap: 12px; padding: 4px 0 12px; }
+.skeleton {
+  position: relative; overflow: hidden; background: var(--line-2);
+  border-radius: var(--radius-sm);
+}
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.72), transparent);
+  animation: shimmer 1.25s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton-line { height: 14px; width: 100%; border-radius: 6px; }
+.skeleton-line--short { width: 32%; }
+.skeleton-card { height: 96px; }
+
+/* ---------- 可访问性 ----------
+   键盘用户必须能看见焦点在哪; 系统开启"减少动态效果"时停掉所有动画。
+   这两条是企业级产品的硬要求, 不是可选的锦上添花。 */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
 .card:hover, .block:hover { box-shadow: 0 6px 24px rgba(20, 19, 19, .05); }
 .btn.primary { box-shadow: 0 1px 2px rgba(20, 19, 19, .18); }
 .btn:active { transform: translateY(1px); }

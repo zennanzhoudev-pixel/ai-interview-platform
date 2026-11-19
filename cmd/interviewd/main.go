@@ -53,6 +53,7 @@ func main() {
 	mysqlDSN := flag.String("mysql-dsn", os.Getenv("MYSQL_DSN"), "MySQL DSN; 留空使用内存存储")
 	redisAddr := flag.String("redis-addr", os.Getenv("REDIS_ADDR"), "Redis 地址; 留空则不启用会话快照")
 	selftest := flag.Bool("selftest", false, "联调自检: 探测已配置的 LLM/TTS/Embedding 是否可用")
+	seed := flag.Bool("seed", false, "生成演示数据(管理员/职位/候选人/投递/排期)后退出")
 	requireAuth := flag.Bool("require-auth", os.Getenv("MYSQL_DSN") != "",
 		"强制 API Key 鉴权(默认: 配置了 MySQL 时开启; 内存演示模式下关闭)")
 	appSecret := flag.String("app-secret", os.Getenv("APP_SECRET"),
@@ -98,7 +99,7 @@ func main() {
 		return
 	}
 
-	if *serve != "" {
+	if *serve != "" || *seed {
 		if err := runServer(serverOptions{
 			addr: *serve, mysqlDSN: *mysqlDSN, redisAddr: *redisAddr,
 			requireAuth: *requireAuth, appSecret: *appSecret, tenantID: *tenantID,
@@ -107,6 +108,7 @@ func main() {
 			iceServers: *iceServers, retentionDays: *retentionDays,
 			adminInvite: *adminInvite, faceLogin: *faceLogin, faceThreshold: *faceThreshold,
 			faceMatcher: *faceMatcher, faceMatcherURL: *faceMatcherURL, faceMatcherKey: *faceMatcherKey,
+			seed: *seed,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
 			os.Exit(1)
@@ -401,6 +403,7 @@ type serverOptions struct {
 	faceMatcher    string
 	faceMatcherURL string
 	faceMatcherKey string
+	seed           bool
 }
 
 // envFloat 读取浮点环境变量, 非法或缺失时用默认值。
@@ -485,6 +488,14 @@ func runServer(opts serverOptions) error {
 	if !opts.requireAuth {
 		logger.Warn("鉴权已关闭(演示模式): 任何调用方都能读取本租户的数据。" +
 			"生产环境请配置 MYSQL_DSN 并设置 APP_SECRET, 或显式开启 -require-auth")
+	}
+
+	if opts.seed {
+		if err := seedDemoData(context.Background(), sessionStore, accounts, opts.tenantID, opts.adminInvite, cliLogger); err != nil {
+			return fmt.Errorf("生成演示数据失败: %w", err)
+		}
+		cliLogger.Print("演示数据已生成, 现在可以正常启动服务")
+		return nil
 	}
 
 	scorerFactory, err := buildScorerFactory(cliLogger)
