@@ -964,8 +964,14 @@ export function renderRoom(root) {
   }
 
   function connect() {
+    const sessionID = info.session_id || state.sessionId;
+    if (!sessionID) {
+      statusEl.className = 'pill warn';
+      statusEl.textContent = '会话信息缺失, 请刷新页面重试';
+      return;
+    }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws/interview/${encodeURIComponent(info.session_id || state.sessionId)}?token=${encodeURIComponent(state.token)}`;
+    const url = `${proto}://${location.host}/ws/interview/${encodeURIComponent(sessionID)}?token=${encodeURIComponent(state.token)}`;
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     interview.ws = ws;
@@ -1144,11 +1150,16 @@ export function renderRoom(root) {
     report: (type, detail) => send({ type: 'proctor', detail: `${type}: ${detail}` }) || reportProctor(type, detail),
   });
 
+  // 面试连接先行: 设备初始化可能卡在权限弹窗(getUserMedia 不 resolve),
+  // 绝不能让它阻塞建连 —— 否则候选人会永远停在"正在连接", 连文字作答都进不去。
+  connect();
   setupDevices().then(() => {
     if (interview.recorder) interview.recorder.stream = state.mediaStream;
     if (interview.recorder && interview.recorder.supported()) interview.recorder.start();
     interview.proctor.start(preview, { analyzeFace: true });
-    connect();
+  }).catch((err) => {
+    statusEl.className = 'pill warn';
+    statusEl.textContent = mediaErrorMessage(err, '摄像头/麦克风');
   });
   return interview;
 }
