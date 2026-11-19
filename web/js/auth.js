@@ -147,10 +147,65 @@ function renderLogin(body, root) {
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn primary wide', text: '登录', onclick: submit }),
     ]),
+    el('button', { class: 'link-btn', text: '忘记密码？', onclick: () => renderPasswordReset(body, root) }),
     status,
     el('p', { class: 'muted small', text: '登录后由系统按角色分流: 企业成员进工作台, 候选人进候选人空间。' }),
   );
   password.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+}
+
+// renderPasswordReset 是"忘记密码"流程: 发验证码 -> 填验证码 + 新密码。
+// 验证码只在下发后 10 分钟内有效; 重置成功后旧会话全部失效。
+function renderPasswordReset(body, root) {
+  clear(body);
+  const email = el('input', { placeholder: '注册邮箱', autocomplete: 'email' });
+  const code = el('input', { placeholder: '6 位验证码', inputmode: 'numeric' });
+  const next = el('input', { type: 'password', placeholder: '新密码, 至少 8 位', autocomplete: 'new-password' });
+  const status = el('p', { class: 'muted small' });
+
+  const sendCode = async () => {
+    status.textContent = '正在发送验证码…';
+    status.className = 'muted small';
+    try {
+      await api.post('/api/v1/auth/password/forgot', { email: email.value.trim() });
+      status.textContent = '验证码已发送。本地开发模式请查看服务端日志。';
+    } catch (err) {
+      status.textContent = err.message;
+      status.className = 'muted small error';
+    }
+  };
+
+  const reset = async () => {
+    status.textContent = '正在重置…';
+    status.className = 'muted small';
+    try {
+      await api.post('/api/v1/auth/password/reset', {
+        email: email.value.trim(),
+        code: code.value.trim(),
+        new_password: next.value,
+      });
+      toast('密码已重置, 请用新密码登录');
+      renderLogin(body, root);
+    } catch (err) {
+      status.textContent = err.message;
+      status.className = 'muted small error';
+    }
+  };
+
+  body.append(
+    el('h2', { text: '找回密码' }),
+    el('label', {}, ['注册邮箱', email]),
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'btn ghost', text: '发送验证码', onclick: sendCode }),
+    ]),
+    el('label', {}, ['验证码', code]),
+    el('label', {}, ['新密码', next]),
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'btn primary wide', text: '重置密码', onclick: reset }),
+    ]),
+    status,
+    el('button', { class: 'link-btn', text: '返回登录', onclick: () => renderLogin(body, root) }),
+  );
 }
 
 function renderRegister(body, root) {
@@ -463,8 +518,58 @@ export function renderProfile(root) {
     pwStatus,
   ]);
 
+  // 验证联系方式: 用验证码确认当前账号的邮箱/手机确实属于本人。
+  const verifyStatus = el('p', { class: 'muted small' });
+  const verifyCode = el('input', { placeholder: '6 位验证码', inputmode: 'numeric' });
+  const verifyKind = user.email ? 'email' : 'phone';
+  const verifyTarget = user.email || user.phone || '';
+  const verifyCard = el('article', { class: 'card' }, [
+    el('h2', { text: '验证联系方式' }),
+    el('p', {
+      class: 'muted small',
+      text: `验证${verifyKind === 'email' ? '邮箱' : '手机号'}: ${verifyTarget || '未填写'}`,
+    }),
+    el('div', { class: 'actions' }, [
+      el('button', {
+        class: 'btn ghost',
+        text: '发送验证码',
+        onclick: async () => {
+          try {
+            await api.post('/api/v1/auth/verify/request', { kind: verifyKind, target: verifyTarget });
+            verifyStatus.textContent = '验证码已发送。本地开发模式请查看服务端日志。';
+            verifyStatus.className = 'muted small';
+          } catch (err) {
+            verifyStatus.textContent = err.message;
+            verifyStatus.className = 'muted small error';
+          }
+        },
+      }),
+    ]),
+    el('label', {}, ['验证码', verifyCode]),
+    el('div', { class: 'actions' }, [
+      el('button', {
+        class: 'btn primary',
+        text: '确认验证',
+        onclick: async () => {
+          try {
+            await api.post('/api/v1/auth/verify/confirm', {
+              kind: verifyKind, target: verifyTarget, code: verifyCode.value.trim(),
+            });
+            verifyStatus.textContent = '联系方式已验证。';
+            verifyStatus.className = 'muted small';
+            toast('联系方式已验证');
+          } catch (err) {
+            verifyStatus.textContent = err.message;
+            verifyStatus.className = 'muted small error';
+          }
+        },
+      }),
+    ]),
+    verifyStatus,
+  ]);
+
   root.append(
-    el('div', { class: 'profile-grid' }, [faceCard, passwordCard]),
+    el('div', { class: 'profile-grid' }, [faceCard, passwordCard, verifyCard]),
     el('article', { class: 'card' }, [
       el('h2', { text: '账号信息' }),
       el('dl', { class: 'facts' }, [
