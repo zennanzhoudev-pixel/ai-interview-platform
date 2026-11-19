@@ -444,6 +444,14 @@ func (s *Service) EnrollFace(ctx context.Context, tenantID, userID string, frame
 				ErrFaceLowQuality, score)
 		}
 	}
+	// 活体: 多帧之间必须存在可测量的变化。完全相同的帧通常意味着
+	// 有人把一张静态照片重复提交, 这是本地匹配器最容易中的攻击。
+	// 单帧无法评估运动, 只在多帧时做活体检查; 真实前端采集的就是多帧。
+	if len(vecs) >= 2 && s.livenessScore(vecs) < minLivenessMotion {
+		return FaceProfile{}, fmt.Errorf(
+			"%w: 画面几乎没有变化, 疑似静态照片; 请眨眼或轻微转头后重试",
+			ErrFaceLowQuality)
+	}
 	// 只存一张平均模板, **不做多样本匹配**。
 	//
 	// 我先试过"每帧单独保留 + 取最高分", 理由是给同一个人多几次机会。
