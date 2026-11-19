@@ -964,7 +964,8 @@ func runSelfTest(logger *log.Logger) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		start := time.Now()
 		_, err := llm.NewClient(cfg).Chat(ctx,
-			[]llm.Message{{Role: "user", Content: "ping"}}, llm.WithMaxTokens(probeMaxTokens))
+			[]llm.Message{{Role: "user", Content: "ping"}},
+			llm.WithMaxTokens(probeMaxTokens), llm.WithJSONMode(false))
 		cancel()
 		if err != nil {
 			logger.Printf("LLM(%s) 失败: %v", cfg.Model, err)

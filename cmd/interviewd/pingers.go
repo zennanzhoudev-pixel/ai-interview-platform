@@ -33,7 +33,8 @@ type llmPing struct {
 // Ping 用最小代价确认模型与凭证都有效。
 func (p llmPing) Ping(ctx context.Context) error {
 	_, err := llm.NewClient(p.cfg).Chat(ctx,
-		[]llm.Message{{Role: "user", Content: "ping"}}, llm.WithMaxTokens(probeMaxTokens))
+		[]llm.Message{{Role: "user", Content: "ping"}},
+		llm.WithMaxTokens(probeMaxTokens), llm.WithJSONMode(false))
 	if err != nil {
 		return fmt.Errorf("模型 %s 探测失败: %w", p.cfg.Model, err)
 	}
