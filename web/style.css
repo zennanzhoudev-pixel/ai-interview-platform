@@ -300,6 +300,16 @@ textarea { resize: vertical; }
   display: grid; place-items: center; width: 118px; height: 118px; border-radius: 50%;
   background: #f6f4ef; color: #1b1b1b; font-family: var(--serif); font-size: 46px;
 }
+
+/* AI 面试官"正在说话": 呼吸 + 扩散环。只是状态提示, 不是真实口型。 */
+.bubble-avatar.speaking {
+  animation: avatar-pulse .9s ease-in-out infinite;
+}
+@keyframes avatar-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(47,107,79,.38); transform: scale(1); }
+  70%  { box-shadow: 0 0 0 14px rgba(47,107,79,0); transform: scale(1.035); }
+  100% { box-shadow: 0 0 0 0 rgba(47,107,79,0); transform: scale(1); }
+}
 .room .muted { color: #9c9a95; }
 .self-card {
   position: absolute; top: 74px; right: 26px; width: 136px;

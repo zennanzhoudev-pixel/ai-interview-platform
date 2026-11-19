@@ -89,6 +89,7 @@ export function renderOverview(root) {
   const account = user && user.user ? user.user : null;
   const displayName = (account && account.name) || (state.info && state.info.candidate_name) || '';
 
+  let aiAvatar = null;
   root.append(
     el('div', { class: 'hero' }, [
       el('div', { class: 'hero-text' }, [
@@ -787,7 +788,7 @@ export function renderRoom(root) {
           el('div', { class: 'meter' }, [meter]),
         ]),
         el('div', { class: 'ai-card' }, [
-          el('div', { class: 'bubble-avatar', text: (info.interviewer_name || 'AI').slice(0, 1) }),
+          (aiAvatar = el('div', { class: 'bubble-avatar', text: (info.interviewer_name || 'AI').slice(0, 1) })),
           el('p', { class: 'muted small', text: `AI 面试官 · ${info.interviewer_name || ''}` }),
           modeTag,
         ]),
@@ -829,6 +830,12 @@ export function renderRoom(root) {
     timerEl.textContent = fmtDuration((Date.now() - interview.startedAt) / 1000);
   }, 1000);
 
+  // AI 说话时给头像一个呼吸/环形动画。这不是数字人口型:
+  // 真实口型需要数字人模型, 这里只做"正在说话"的状态提示。
+  const avatarTimer = setInterval(() => {
+    if (aiAvatar) aiAvatar.classList.toggle('speaking', !!(interview.player && interview.player.playing));
+  }, 120);
+
   voiceButton.onclick = toggleVoice;
   muteButton.onclick = () => {
     interview.muted = !interview.muted;
@@ -850,6 +857,7 @@ export function renderRoom(root) {
     if (interview.closed) return;
     interview.closed = true;
     clearInterval(timer);
+    clearInterval(avatarTimer);
     if (interview.proctor) interview.proctor.stop();
     if (interview.recorder) interview.recorder.stop().catch(() => {});
     if (interview.capture) interview.capture.stop();
