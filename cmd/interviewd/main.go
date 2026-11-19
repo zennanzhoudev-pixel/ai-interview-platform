@@ -44,6 +44,7 @@ import (
 )
 
 func main() {
+	loadDotEnv()
 	round := flag.Int("round", 1, "面试轮次 (1..5)")
 	minutes := flag.Int("minutes", 45, "本轮面试时长预算 (分钟)")
 	maxTurns := flag.Int("max-turns", 60, "单场最大问答轮数 (安全上限)")
