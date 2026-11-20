@@ -1,11 +1,31 @@
 # AI Interview OS · 企业级 AI 线上面试中台
 
+[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go)](https://go.dev/)
+[![CI](https://github.com/zennanzhoudev-pixel/ai-interview-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/zennanzhoudev-pixel/ai-interview-platform/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 把组织里的 **1 面到 5 面**标准化为可编排的面试流程: AI 承担提问、追问与评分,
 人类面试官在自己该出现的那一轮进入面试间; 面试结论自动回流到招聘管道,
 所有人对同一份数据做判断。
 
 `Go 1.22` · `WebSocket(文本+音频+视频信令)` · `WebRTC` · `MySQL` · `Redis` ·
 `Prometheus` · `OpenTelemetry` · 零构建前端(go:embed)
+
+## 文档导航
+
+| 文档 | 内容 |
+|---|---|
+| [设计文档](docs/设计文档.md) | 五轮面试产品设计、整体架构、核心链路、数据模型、治理 |
+| [API 参考](docs/API.md) | HTTP / WebSocket 接口、鉴权方式、错误码、示例 |
+| [模型选型与接入清单](docs/模型选型与接入清单.md) | 已接 / 未接能力、当前真实状态、还缺哪些测试数据 |
+| [开发指南](docs/开发指南.md) | 环境要求、目录结构、扩展点、编码约定、常见坑 |
+| [测试与质量](docs/测试与质量.md) | 五层测试、CI 门禁、真实链路延迟基线 |
+| [部署文档](deploy/DEPLOY.md) | Docker Compose + Caddy 自动 HTTPS 上线步骤 |
+| [路线图](docs/路线图.md) | 已完成能力、下一步、明确不做的事 |
+| [安全策略](SECURITY.md) | 漏洞报告、安全设计、生产部署建议 |
+| [贡献指南](CONTRIBUTING.md) | 分支 / 提交规范、PR 检查清单 |
+| [变更日志](CHANGELOG.md) | 版本变更记录 |
 
 ---
 
@@ -431,6 +451,19 @@ make selftest
    数据 internal/store (内存 / MySQL 同一套契约) · internal/recording(分片 · Range · 保留期)
                         |
    治理 internal/auth · internal/privacy · internal/observability · internal/platform
+```
+
+```mermaid
+flowchart TD
+  U[候选人 / 面试官浏览器] -->|WebSocket: 文本 + PCM16 + WebRTC 信令| API[接入层 internal/api]
+  API --> ORCH[面试编排 internal/orchestrator]
+  API --> MEDIA[实时媒体 internal/media]
+  ORCH --> SCORE[评分 internal/scoring]
+  ORCH --> RAG[知识库与检索 internal/knowledge · rag]
+  ORCH --> RESUME[简历解析 internal/resume]
+  API --> SANDBOX[判题沙箱 internal/sandbox]
+  API --> DATA[存储 internal/store · recording]
+  API --> GOV[治理 auth · privacy · observability · platform]
 ```
 
 ### 几个值得单独说的设计
